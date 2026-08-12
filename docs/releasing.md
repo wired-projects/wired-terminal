@@ -8,10 +8,10 @@ the same artefacts to R2.
 git tag v1.0.1 && git push origin v1.0.1
 ```
 
-## Where the downloads actually live
+## Where the downloads live
 
-The repository is private, so a GitHub release is not a link anyone outside can
-open. The public artefacts are on R2:
+GitHub releases carry the raw bundles; the artefacts people are pointed at live
+on R2, because that is where versioned objects, stable aliases and a CDN are:
 
 | | |
 |---|---|

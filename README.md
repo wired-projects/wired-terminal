@@ -115,8 +115,15 @@ On Ubuntu/Debian one script does the whole install — the Rust toolchain, Node,
 the Claude Code CLI, a service account and a systemd unit:
 
 ```bash
-git clone <this repo> && cd wired-terminal
-sudo bash scripts/install-ubuntu.sh
+curl -fsSL https://terminal.wired.dev/install.sh | sudo bash
+```
+
+That clones this repo to `/opt/wired-terminal/src` and runs the script below
+for you. From a checkout it is the same script, by hand:
+
+```bash
+git clone https://github.com/wired-projects/wired-terminal.git
+cd wired-terminal && sudo bash scripts/install-ubuntu.sh
 ```
 
 It is headless: the backend only. A server does not need the desktop app, and
