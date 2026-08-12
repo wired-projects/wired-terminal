@@ -49,7 +49,7 @@ The bucket also needs a CORS rule allowing `GET` from the site's origin, or the
 page's fetch fails and the tab looks exactly like a product with no release:
 
 ```bash
-wrangler r2 bucket cors put wired-terminal-releases \
+wrangler r2 bucket cors set wired-terminal-releases \
   --file ../wired-terminal-landing/scripts/r2-cors.json
 ```
 
