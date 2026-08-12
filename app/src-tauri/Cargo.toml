@@ -1,0 +1,27 @@
+[package]
+name = "wired-terminal-app"
+version = "1.0.0"
+description = "Control Claude Code, Grok, Codex and Gemini as a 24/7 personal assistant"
+authors = ["wired"]
+edition = "2021"
+
+[lib]
+name = "wired_terminal_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `tray-icon` is what keeps the assistant reachable once the window is closed —
+# without it, "24/7" on a laptop means "while the window is open".
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+# Login items on all three platforms; driven from Rust, so the frontend needs
+# no extra JS package for it.
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+wired-backend = { path = "../../crates/wired-backend" }

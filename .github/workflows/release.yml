@@ -1,0 +1,246 @@
+name: Release
+
+# Builds the double-clickable app. Tag a version and every platform's installer
+# is attached to the release — the whole point being that a non-coder downloads
+# one file rather than cloning a repository and installing a Rust toolchain.
+#
+# Signing is opt-in by secret: the workflow runs unsigned if the certificates
+# are not configured, so a fork can still produce artefacts. See
+# `docs/releasing.md` for what each secret is and why an unsigned macOS build
+# reports itself as "damaged".
+#
+# A second job publishes the same artefacts to R2
+# (wired-terminal-releases → https://wired-terminal-releases.wired.dev), which
+# is where terminal.wired.dev reads `updates/latest.json` to decide whether it
+# has downloads to offer. A GitHub release behind a private repo is not a
+# download link anyone outside can use; the bucket is.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v1.0.1)'
+        required: true
+      release_notes:
+        description: 'Notes for latest.json (defaults to the tag)'
+        required: false
+        default: ''
+      upload_r2:
+        description: 'Publish installers + latest.json to R2'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple silicon and Intel are separate builds, not a universal
+          # binary: the PTY layer links libc directly and the smaller download
+          # is worth two artefacts.
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            name: macOS (Apple silicon)
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            name: macOS (Intel)
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            name: Linux
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: Windows
+
+    runs-on: ${{ matrix.platform }}
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            build-essential curl wget file libssl-dev libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/wired-backend
+            app/src-tauri
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm run install:all
+
+      - name: Check the backend
+        # Cheap here, and a release that fails to build on one platform should
+        # fail loudly rather than ship three of four artefacts.
+        run: |
+          cargo fmt --manifest-path crates/wired-backend/Cargo.toml -- --check
+          cargo clippy --manifest-path crates/wired-backend/Cargo.toml -- -D warnings
+          cargo test --manifest-path crates/wired-backend/Cargo.toml
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unset in a fork: the build still runs, and the artefacts are
+          # unsigned. macOS will call an unsigned build "damaged".
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # Minisign key for the Tauri updater — NOT Apple/Windows code
+          # signing. Absent, the build still produces installers; it just
+          # produces no .sig files, and the publish job says so.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'Wired ${{ github.event.inputs.tag || github.ref_name }}'
+          releaseBody: |
+            Download the file for your computer, open it, and follow the app.
+
+            - **macOS**: the `.dmg`
+            - **Windows**: the `.exe`
+            - **Linux**: the `.AppImage` or `.deb`
+
+            Running a server instead? `scripts/install-ubuntu.sh` is unchanged.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
+      - name: Upload artifacts for the R2 publish
+        uses: actions/upload-artifact@v4
+        with:
+          # One directory per target: two macOS dmgs are otherwise
+          # indistinguishable, and the publish script keys off this name.
+          name: wired-terminal-${{ matrix.target }}
+          path: |
+            app/src-tauri/target/**/release/bundle/**/*.dmg
+            app/src-tauri/target/**/release/bundle/**/*.msi
+            app/src-tauri/target/**/release/bundle/**/*.exe
+            app/src-tauri/target/**/release/bundle/**/*.AppImage
+            app/src-tauri/target/**/release/bundle/**/*.deb
+            app/src-tauri/target/**/release/bundle/**/*.tar.gz
+            app/src-tauri/target/**/release/bundle/**/*.sig
+          if-no-files-found: warn
+
+  publish-r2:
+    name: Publish to R2
+    needs: build
+    runs-on: ubuntu-latest
+    # A tag always publishes; a manual run publishes unless told not to. One
+    # failed platform must not silently ship a partial release, so this needs
+    # the whole matrix green.
+    if: |
+      always()
+      && !cancelled()
+      && needs.build.result == 'success'
+      && (
+        startsWith(github.ref, 'refs/tags/v')
+        || (github.event_name == 'workflow_dispatch' && inputs.upload_r2)
+      )
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the R2 credentials before building anything else
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID."
+            exit 1
+          fi
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] \
+            && { [ -z "${R2_ACCESS_KEY_ID:-}" ] || [ -z "${R2_SECRET_ACCESS_KEY:-}" ]; }; then
+            echo "::error::Need CLOUDFLARE_API_TOKEN (Account → R2 → Edit) or the R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY pair."
+            exit 1
+          fi
+          echo "R2 credentials present."
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: wired-terminal-*
+          merge-multiple: false
+
+      - name: Install zip + wrangler (+ awscli when using R2 S3 keys)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zip
+          npm install -g wrangler@4
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ]; then
+            python3 -m pip install --user -q awscli
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+
+      # Auth (pick one):
+      #   A) Profile API Token → secrets.CLOUDFLARE_API_TOKEN
+      #      (Account → Workers R2 Storage → Edit) — used by Wrangler
+      #   B) R2 dashboard "Object Read & Write" token →
+      #      secrets.R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY (S3 API)
+      - name: Publish installers + latest.json to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: wired-terminal-releases
+          RELEASES_PUBLIC_BASE: https://wired-terminal-releases.wired.dev
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes || github.event.inputs.tag || github.ref_name }}
+        run: node .github/scripts/publish-r2.mjs
+
+      - name: Smoke-check the public manifest
+        run: |
+          set -e
+          url="https://wired-terminal-releases.wired.dev/updates/latest.json"
+          echo "GET $url"
+          curl -fsSL "$url" | tee /tmp/latest.json
+          node -e '
+            const j = require("/tmp/latest.json");
+            if (!j.version || !j.downloads || !Object.keys(j.downloads).length) {
+              console.error("invalid latest.json", j);
+              process.exit(1);
+            }
+            const signed = Object.keys(j.platforms || {}).length;
+            console.log("OK version", j.version,
+              "| downloads:", Object.keys(j.downloads).join(", "),
+              "| signed updater platforms:", signed || "none (auto-update off)");
+          '

@@ -1,0 +1,78 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Rust
+target/
+**/target/
+
+# Build / dist
+dist/
+build/
+app/dist/
+**/dist/
+
+# Tauri generated noise
+**/*.rs.bk
+app/src-tauri/gen/
+# Platform icon dumps (keep only core icons/*.png|icns|ico at icons root)
+app/src-tauri/icons/android/
+app/src-tauri/icons/ios/
+app/src-tauri/icons/Square*.png
+app/src-tauri/icons/StoreLogo.png
+
+# Logs & debug
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+/tmp/
+*.tmp
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# Editors / IDEs
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+.history/
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Tooling caches
+.cache/
+.turbo/
+.parcel-cache/
+.vite/
+.eslintcache
+*.tsbuildinfo
+
+# Local agent / session data (never commit)
+.hermes/
+.claude/
+.grok/
+agents/
+hermes-agent-main/
+
+# Staging dir written by .github/scripts/publish-r2.mjs
+.publish-r2/

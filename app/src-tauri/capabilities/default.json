@@ -1,0 +1,8 @@
+{
+  "identifier": "default",
+  "description": "wired terminal default permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

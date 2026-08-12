@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wired · live transcript</title>
+<style>
+  :root {
+    --bg: #fbfaf9;
+    --panel: #ffffff;
+    --ink: #1c1a17;
+    --ink-soft: #57534e;
+    --ink-faint: #8b857e;
+    --rule: #e7e3de;
+    --accent: #6035e0;
+    --accent-soft: #f1ecff;
+    --user-bg: #f4f1ed;
+    --prompt-bg: #fff8e6;
+    --prompt-edge: #d99b12;
+    --notice-bg: #fdf1ed;
+    --notice-edge: #c2410c;
+    --live: #16a34a;
+    --dead: #b91c1c;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #100e18;
+      --panel: #181528;
+      --ink: #eeecf5;
+      --ink-soft: #b8b3c9;
+      --ink-faint: #7b7594;
+      --rule: #282338;
+      --accent: #a78bfa;
+      --accent-soft: #221a33;
+      --user-bg: #1f1b30;
+      --prompt-bg: #2b2313;
+      --prompt-edge: #d99b12;
+      --notice-bg: #2c1d17;
+      --notice-edge: #ef7c4a;
+      --live: #4ade80;
+      --dead: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #100e18;
+    --panel: #181528;
+    --ink: #eeecf5;
+    --ink-soft: #b8b3c9;
+    --ink-faint: #7b7594;
+    --rule: #282338;
+    --accent: #a78bfa;
+    --accent-soft: #221a33;
+    --user-bg: #1f1b30;
+    --prompt-bg: #2b2313;
+    --prompt-edge: #d99b12;
+    --notice-bg: #2c1d17;
+    --notice-edge: #ef7c4a;
+    --live: #4ade80;
+    --dead: #f87171;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 20px;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .mark { width: 20px; height: 20px; color: var(--accent); flex: none; }
+  .brand {
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--accent);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dead); flex: none; }
+  .dot.live { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 22%, transparent); }
+  .state { font-size: 12.5px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .spacer { flex: 1; }
+  .chip {
+    font-family: var(--mono); font-size: 11.5px;
+    padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--rule); color: var(--ink-soft); background: var(--panel);
+  }
+  .toggle {
+    font: inherit; font-size: 12.5px; cursor: pointer;
+    padding: 4px 11px; border-radius: 999px;
+    border: 1px solid var(--rule); background: var(--panel); color: var(--ink-soft);
+  }
+  .toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+  main { max-width: 780px; margin: 0 auto; padding: 28px 20px 96px; }
+
+  .turn { margin: 0 0 6px; }
+  .turn + .turn { margin-top: 22px; }
+
+  /* user */
+  .user {
+    display: flex; gap: 10px; align-items: baseline;
+    background: var(--user-bg); border: 1px solid var(--rule);
+    border-radius: 10px; padding: 11px 14px;
+    margin-top: 34px;
+  }
+  .turn:first-child .user { margin-top: 0; }
+  .user .caret { color: var(--accent); font-family: var(--mono); font-weight: 700; flex: none; }
+  .user .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* assistant */
+  .agent { padding: 2px 2px 2px 15px; border-left: 2px solid var(--rule); }
+  .agent .line { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .agent .line + .line { margin-top: 2px; }
+
+  /* raw mode: the screen is column-aligned art, so keep the grid */
+  #feed.raw .agent { border-left: none; padding-left: 0; }
+  #feed.raw .line, #feed.raw .action {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.45;
+    white-space: pre; overflow-wrap: normal;
+  }
+  #feed.raw .agent { overflow-x: auto; }
+
+  /* tool / action rows the CLIs print while working */
+  .action {
+    display: flex; gap: 8px; align-items: baseline;
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-faint);
+    padding: 2px 0;
+  }
+  .action .mark { color: var(--accent); flex: none; }
+
+  /* approval prompt — needs the operator */
+  .prompt {
+    background: var(--prompt-bg);
+    border: 1px solid var(--prompt-edge); border-left-width: 3px;
+    border-radius: 8px; padding: 12px 14px; margin-top: 14px;
+  }
+  .prompt .label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--prompt-edge); display: block; margin-bottom: 6px;
+  }
+  .prompt .line { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .prompt .hint { margin-top: 9px; font-size: 12.5px; color: var(--ink-soft); }
+  .prompt .answer { display: flex; gap: 8px; margin-top: 11px; }
+  .prompt .answer button {
+    padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--rule); border-radius: 7px;
+    background: var(--panel); color: var(--ink);
+  }
+  .prompt .answer button.ok { border-color: transparent; background: var(--accent); color: #fff; }
+  .prompt .answer button:disabled { opacity: 0.45; cursor: default; }
+  .prompt code { font-family: var(--mono); font-size: 12px; background: var(--panel); padding: 1px 5px; border-radius: 4px; }
+
+  .notice {
+    background: var(--notice-bg); border-left: 3px solid var(--notice-edge);
+    border-radius: 6px; padding: 8px 12px; margin-top: 14px;
+    font-size: 13px; color: var(--ink-soft);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+
+  .divider {
+    display: flex; align-items: center; gap: 12px;
+    margin: 30px 0 4px; color: var(--ink-faint);
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em;
+  }
+  .divider::before, .divider::after { content: ""; height: 1px; background: var(--rule); flex: 1; }
+
+  .empty {
+    text-align: center; color: var(--ink-faint); padding: 72px 20px;
+  }
+  .empty h1 { font-size: 17px; font-weight: 600; color: var(--ink-soft); margin: 0 0 10px; }
+  .empty p { margin: 0 0 6px; font-size: 13.5px; }
+  .empty code {
+    font-family: var(--mono); font-size: 12.5px; background: var(--panel);
+    border: 1px solid var(--rule); padding: 2px 7px; border-radius: 5px;
+    display: inline-block; margin-top: 4px;
+  }
+
+  .jump {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 26px; z-index: 20;
+    font: inherit; font-size: 13px; cursor: pointer;
+    padding: 8px 16px; border-radius: 999px;
+    background: var(--accent); color: #fff; border: none;
+    box-shadow: 0 6px 20px rgba(0,0,0,.22);
+    opacity: 0; pointer-events: none; transition: opacity .16s;
+  }
+  .jump.show { opacity: 1; pointer-events: auto; }
+
+  @media (max-width: 560px) {
+    header { padding: 9px 13px; gap: 9px; }
+    .state, .chip { display: none; }
+    main { padding: 18px 13px 88px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <svg class="mark" viewBox="0 0 100 100" fill="none" aria-hidden="true" focusable="false">
+    <path d="M12 52 C22 52 25 82 38 82 C47 82 48 22 50 22 C52 22 53 82 62 82 C75 82 78 52 88 52"
+          stroke="currentColor" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="12" cy="52" r="6.5" fill="currentColor"/>
+    <circle cx="50" cy="22" r="6.5" fill="currentColor"/>
+    <circle cx="88" cy="52" r="6.5" fill="currentColor"/>
+  </svg>
+  <span class="brand">wired</span>
+  <span class="dot" id="dot"></span>
+  <span class="state" id="state">connecting…</span>
+  <span class="spacer"></span>
+  <span class="chip" id="provider" hidden></span>
+  <button class="toggle" id="raw" aria-pressed="false" title="Stream the raw TUI screen instead of the transcript">raw</button>
+</header>
+
+<main id="feed">
+  <div class="empty" id="empty">
+    <h1>Waiting for the agent</h1>
+    <p>Nothing on the wire yet. If no session is running:</p>
+    <code>curl -sX POST 127.0.0.1:8000/api/agent/start -H 'Content-Type: application/json' -d '{"provider":"claude"}'</code>
+  </div>
+</main>
+
+<button class="jump" id="jump">↓ latest</button>
+
+<script>
+(() => {
+  const feed = document.getElementById('feed');
+  const empty = document.getElementById('empty');
+  const dot = document.getElementById('dot');
+  const state = document.getElementById('state');
+  const providerChip = document.getElementById('provider');
+  const jump = document.getElementById('jump');
+  const rawBtn = document.getElementById('raw');
+
+  let es = null;
+  let raw = false;
+  let block = null;        // current open assistant block
+  let stick = true;        // auto-follow the bottom
+  let lines = 0;
+
+  // --- scroll behaviour -----------------------------------------------
+  const nearBottom = () =>
+    window.innerHeight + window.scrollY >= document.body.offsetHeight - 120;
+
+  addEventListener('scroll', () => {
+    stick = nearBottom();
+    jump.classList.toggle('show', !stick);
+  }, { passive: true });
+
+  jump.onclick = () => {
+    stick = true;
+    jump.classList.remove('show');
+    scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  };
+
+  const follow = () => { if (stick) scrollTo(0, document.body.scrollHeight); };
+
+  // --- rendering ------------------------------------------------------
+  // Everything goes in via textContent: transcript text is whatever the
+  // agent printed, including file contents. Never innerHTML.
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  function add(node) {
+    if (!lines++) empty.remove();
+    feed.append(node);
+    follow();
+  }
+
+  function pushUser(text) {
+    block = null;
+    const turn = el('div', 'turn');
+    const row = el('div', 'user');
+    row.append(el('span', 'caret', '❯'), el('div', 'body', text));
+    turn.append(row);
+    add(turn);
+  }
+
+  // The CLIs print progress rows while working ("◆ Run git status",
+  // "⏺ Reading file"). Same stream, but they are activity, not prose.
+  const ACTION = /^([◆⏺●▪▸])\s+(.*)$/;
+
+  function pushAgent(text) {
+    if (!block) {
+      const turn = el('div', 'turn');
+      block = el('div', 'agent');
+      turn.append(block);
+      add(turn);
+    }
+    const m = ACTION.exec(text);
+    if (m) {
+      const row = el('div', 'action');
+      row.append(el('span', 'mark', m[1]), el('span', null, m[2]));
+      block.append(row);
+    } else {
+      block.append(el('div', 'line', text));
+    }
+    follow();
+  }
+
+  // Answering used to be an instruction to go and send a POST, which left the
+  // agent blocked until somebody reached for curl. It is two buttons now.
+  async function answer(box, allow) {
+    box.querySelectorAll('button').forEach((b) => (b.disabled = true));
+    const hint = box.querySelector('.hint');
+    try {
+      const r = await fetch(withToken('/api/agent/approve'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allow }),
+      });
+      if (!r.ok) throw new Error(((await r.json()) || {}).detail || 'could not answer');
+      hint.textContent = allow ? 'You allowed this.' : "You said don't.";
+    } catch (e) {
+      hint.textContent = String(e.message || e);
+      box.querySelectorAll('button').forEach((b) => (b.disabled = false));
+    }
+  }
+
+  function pushPrompt(text) {
+    // Consecutive prompt rows belong to one dialog.
+    if (block && block.classList.contains('prompt')) {
+      block.insertBefore(el('div', 'line', text), block.querySelector('.answer'));
+      follow();
+      return;
+    }
+    const turn = el('div', 'turn');
+    block = el('div', 'prompt');
+    block.append(el('span', 'label', 'needs your answer'));
+    block.append(el('div', 'line', text));
+
+    const row = el('div', 'answer');
+    const allow = el('button', 'ok', 'Allow');
+    const deny = el('button', null, "Don't");
+    const box = block;
+    allow.onclick = () => answer(box, true);
+    deny.onclick = () => answer(box, false);
+    row.append(allow, deny);
+    block.append(row, el('div', 'hint', ''));
+
+    turn.append(block);
+    add(turn);
+  }
+
+  function pushNotice(text) {
+    block = null;
+    add(el('div', 'notice', text));
+  }
+
+  function pushDivider(text) {
+    block = null;
+    add(el('div', 'divider', text));
+  }
+
+  // --- the stream -----------------------------------------------------
+  // When the backend runs with WIRED_AUTH_TOKEN, this page is opened as
+  // /reader?token=… — carry that through, since neither EventSource nor a
+  // plain fetch here can set an Authorization header.
+  const TOKEN = new URLSearchParams(location.search).get('token') || '';
+  const withToken = (path, params = {}) => {
+    const url = new URL(path, location.origin);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    if (TOKEN) url.searchParams.set('token', TOKEN);
+    return url.toString();
+  };
+
+  function connect() {
+    if (es) es.close();
+    block = null;
+    es = new EventSource(withToken('/api/agent/output/stream', raw ? { chrome: '1' } : {}));
+
+    es.onopen = () => {
+      dot.classList.add('live');
+      state.textContent = raw ? 'live · raw screen' : 'live';
+    };
+
+    es.onerror = () => {
+      dot.classList.remove('live');
+      state.textContent = 'reconnecting…';
+    };
+
+    es.onmessage = (e) => {
+      // A user turn arrives as a blank data line then "❯ text" — the blank
+      // is the paragraph break that makes `curl -N` readable.
+      const text = e.data.replace(/^\n+/, '');
+      if (!text.trim()) return;
+      if (text.startsWith('❯ ')) pushUser(text.slice(2));
+      else pushAgent(text);
+    };
+
+    es.addEventListener('prompt', (e) => pushPrompt(e.data));
+    es.addEventListener('notice', (e) => pushNotice(e.data));
+    // Wired's own voice: a scheduled run, a device asking to be paired.
+    es.addEventListener('system', (e) => pushNotice(e.data));
+    es.addEventListener('status', (e) => pushDivider(e.data));
+    es.addEventListener('session', (e) => pushDivider(e.data));
+  }
+
+  rawBtn.onclick = () => {
+    raw = !raw;
+    rawBtn.setAttribute('aria-pressed', String(raw));
+    feed.classList.toggle('raw', raw);
+    feed.replaceChildren();
+    lines = 1;                       // empty-state already gone
+    pushDivider(raw ? 'raw screen' : 'transcript');
+    connect();
+  };
+
+  // ?theme=light|dark forces a palette; otherwise follow the OS.
+  const forced = new URLSearchParams(location.search).get('theme');
+  if (forced === 'light' || forced === 'dark') {
+    document.documentElement.dataset.theme = forced;
+  }
+
+  // --- session badge --------------------------------------------------
+  async function poll() {
+    try {
+      const r = await fetch(withToken('/api/agent/status'));
+      const s = (await r.json()).session || {};
+      providerChip.hidden = !s.running;
+      if (s.running) providerChip.textContent = `${s.provider} · gen ${s.generation}`;
+    } catch { providerChip.hidden = true; }
+  }
+  poll();
+  setInterval(poll, 5000);
+
+  connect();
+})();
+</script>
+</body>
+</html>

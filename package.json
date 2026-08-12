@@ -1,0 +1,31 @@
+{
+  "name": "wired-terminal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Control Claude Code, Grok, Codex and Gemini as a 24/7 personal assistant, over HTTP and a live terminal UI",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "install:all": "cd app && npm install",
+    "start": "npx concurrently -n api,ui -c magenta,cyan \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:backend": "cargo run --manifest-path crates/wired-backend/Cargo.toml",
+    "start:frontend": "cd app && npm run dev",
+    "start:assistant": "WIRED_ASSISTANT_AUTO_START=1 WIRED_ASSISTANT_KEEP_ALIVE=1 cargo run --release --manifest-path crates/wired-backend/Cargo.toml",
+    "start:24x7": "npx concurrently -n api,ui -c magenta,cyan \"npm run start:assistant\" \"npm run start:frontend\"",
+    "start:desktop": "cd app && npm run tauri:dev",
+    "wired": "cargo run --quiet --manifest-path crates/wired-backend/Cargo.toml --bin wired --",
+    "build": "cd app && npm run build",
+    "build:backend": "cargo build --release --manifest-path crates/wired-backend/Cargo.toml",
+    "build:desktop": "cd app && npm run tauri:build",
+    "test": "cargo test --manifest-path crates/wired-backend/Cargo.toml",
+    "lint": "npm run lint:backend && npm run lint:frontend",
+    "lint:backend": "cargo clippy --manifest-path crates/wired-backend/Cargo.toml -- -D warnings",
+    "lint:frontend": "cd app && npm run typecheck",
+    "format": "cargo fmt --manifest-path crates/wired-backend/Cargo.toml"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

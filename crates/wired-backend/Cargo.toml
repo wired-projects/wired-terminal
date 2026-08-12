@@ -1,0 +1,53 @@
+[package]
+name = "wired-backend"
+version = "1.0.0"
+edition = "2021"
+description = "Control Claude Code and Grok CLI as a 24/7 personal assistant"
+license = "MIT"
+
+# Two consumers: the standalone server binary, and the desktop app, which links
+# the library and runs it in-process instead of shipping a second executable.
+[lib]
+name = "wired_backend"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wired-backend"
+path = "src/main.rs"
+
+# The management CLI. It lives in this crate rather than beside it so that it
+# and the server cannot disagree about where settings live or what the API
+# returns — `wired status` reads the same `paths::config_dir()` the server wrote.
+[[bin]]
+name = "wired"
+path = "src/cli/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net"] }
+tower-http = { version = "0.6", features = ["cors"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+portable-pty = "0.9"
+vt100 = "0.16"
+regex = "1"
+base64 = "0.22"
+subtle = "2"
+rand = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2"
+rmcp = { version = "3", features = ["server", "macros", "transport-streamable-http-server"] }
+schemars = "1.0"
+tower-service = "0.3"
+# The chat gateway holds an outbound HTTPS long-poll; rustls keeps the build
+# free of a system OpenSSL, which matters for cross-compiled release artifacts.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Schedules are expressed in the user's local time ("every morning at 8"), which
+# needs a real timezone rather than an offset from UTC seconds.
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+tracing-appender = "0.2"
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
