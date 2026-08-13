@@ -1,6 +1,6 @@
 [package]
 name = "wired-terminal-app"
-version = "1.0.8"
+version = "1.0.9"
 description = "Control Claude Code, Grok, Codex and Gemini as a 24/7 personal assistant"
 authors = ["wired"]
 edition = "2021"
