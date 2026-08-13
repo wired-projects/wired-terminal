@@ -317,6 +317,36 @@ if [ -x "$INSTALL_DIR/bin/wired" ]; then
   install -d -m 0755 "$LINK_DIR"
   ln -sfn "$INSTALL_DIR/bin/wired" "$CLI_LINK"
   info "wired → $CLI_LINK"
+
+  # Saying where it went is not the same as it being reachable.
+  case ":$PATH:" in
+    *":$LINK_DIR:"*)
+      # On PATH, but possibly not first: another wired earlier wins, and the
+      # symptom is a version that never changes however often you update.
+      found="$(command -v wired 2>/dev/null || true)"
+      if [ -n "$found" ] && [ "$found" != "$CLI_LINK" ]; then
+        warn "another wired is earlier on your PATH and will run instead:"
+        warn "  $found"
+        warn "Remove that one, or put $LINK_DIR ahead of it."
+      fi
+      ;;
+    *)
+      # Ubuntu's ~/.profile adds ~/.local/bin only if it existed at login, and
+      # this may have just created it.
+      warn "$LINK_DIR is not on your PATH, so 'wired' will not be found yet."
+      warn "For this shell:   export PATH=\"$LINK_DIR:\$PATH\""
+      if [ "$LINK_DIR" = "$HOME/.local/bin" ]; then
+        warn "Permanently:      log out and back in — ~/.profile adds it once it exists."
+      fi
+      ;;
+  esac
+  # A shell that ran a previous install caches the old path and reports "No such
+  # file or directory" for a binary sitting right here. That hash lives in the
+  # *caller's* shell, which this one cannot inspect — so it is mentioned rather
+  # than detected.
+  if [ "$CLI_LINK" != "/usr/local/bin/wired" ]; then
+    info "moved from a previous install? your shell may cache the old path: hash -r"
+  fi
 else
   warn "no 'wired' CLI alongside --binary; managing this install means systemctl and curl"
 fi
