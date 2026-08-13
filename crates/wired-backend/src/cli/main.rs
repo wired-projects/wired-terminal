@@ -104,6 +104,7 @@ async fn run(ui: &Ui, cli: args::Cli) -> client::Result<i32> {
         Command::Watch => cmd::watch(ui, &target).await,
         Command::Approve { allow } => cmd::approve(ui, &target, *allow).await,
         Command::Doctor { log } => cmd::doctor(ui, &target, *log, json).await,
+        Command::Setup { yes, telegram } => cmd::setup(ui, &target, *yes, *telegram, json).await,
         Command::Update { check_only, yes } => cmd::update(ui, &target, *check_only, *yes).await,
         Command::Pair(sub) => cmd::pair(ui, &target, sub, json).await,
         Command::Telegram(sub) => cmd::telegram(ui, &target, sub, json).await,

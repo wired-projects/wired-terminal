@@ -133,6 +133,7 @@ token by itself — reading `wired.env`, which is why it works as any user in th
 service group and asks for nothing:
 
 ```bash
+wired setup           # the guided first run — start here
 wired status          # service, agent, API and chat in one screen
 wired ask "..."       # send a task, wait for the reply, print it
 wired watch           # live transcript, ctrl-c to detach
@@ -143,6 +144,29 @@ wired doctor          # every check in §3 at once, and an exit code
 
 `wired --help` lists the rest. Each section below leads with the command and
 keeps the `curl` beside it.
+
+---
+
+## 1b. Or just run the wizard
+
+Sections 2 to 4 below are the same steps one at a time, with the `curl` beside
+each. If you would rather be walked through it:
+
+```bash
+wired setup
+```
+
+It checks the agent CLI, starts a session, offers to send it a test message,
+takes your bot token without echoing it, **waits for your phone to ask to pair
+and offers to let it in**, and clears anything the agent is already blocked on.
+That last pair is the point: pairing otherwise means messaging the bot, coming
+back, and running two more commands.
+
+It asks before every change, and `--yes` takes only the steps that cannot
+surprise anyone — naming the ones it skipped, so a provisioning script gets an
+honest report rather than a wizard stuck on a prompt. `--no-telegram` leaves the
+bridge alone. Nothing it does is exclusive to it: every step is its own command
+below, and `wired doctor` is the same checks with no questions.
 
 ---
 

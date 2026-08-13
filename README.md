@@ -67,6 +67,7 @@ backend — one more binary, no interpreter — and it drives the API and the
 service so that neither `systemctl` nor a remembered `curl` is required:
 
 ```bash
+wired setup                               # the guided first run — start here
 wired status                              # service, agent, API and chat, one screen
 wired ask "summarise my git status"       # send a task, print the reply
 wired watch                               # live transcript, ctrl-c to detach
@@ -156,6 +157,9 @@ sudo -u wired -H claude          # or put ANTHROPIC_API_KEY in wired.env
 wired restart
 wired logs -f
 ```
+
+Or let `wired setup` walk the whole thing — CLI, session, Telegram, pairing —
+in one pass, waiting for your phone instead of telling you to come back.
 
 The agent runs as that account with auto-approve on, so it can do anything the
 account can. Keep the default loopback bind and reach it over SSH —

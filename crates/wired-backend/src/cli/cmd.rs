@@ -593,6 +593,288 @@ async fn fetch_and_swap(
     Ok(reported)
 }
 
+/// The guided first run.
+///
+/// Everything here exists as its own command already — `doctor`, `start`,
+/// `telegram`, `pair`, `approve`. What this adds is the order, and the waiting:
+/// the steps depend on each other, and two of them used to end with "now go and
+/// do something else, then run another command". Pairing in particular was
+/// message-the-bot-then-poll, so this waits for the request and offers to
+/// approve it, which is the difference between five commands and one.
+///
+/// It asks before every change. `--yes` takes the steps that cannot surprise
+/// anyone and skips the rest, saying which — a provisioning script wants an
+/// honest report, not a wizard blocked on a prompt it cannot answer.
+pub async fn setup(
+    ui: &Ui,
+    target: &Target,
+    yes: bool,
+    want_telegram: bool,
+    json_out: bool,
+) -> Result<i32> {
+    let api = Api::connect(target).await?;
+    let report = api.get("/api/diagnostics").await?;
+
+    if json_out {
+        // Nothing interactive can happen in a pipe, so this is `doctor` with a
+        // different name rather than a wizard pretending to run.
+        ui.json(&report);
+        return Ok(EXIT_OK);
+    }
+
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let mut skipped: Vec<&str> = Vec::new();
+
+    // ── 1. the agent CLI ────────────────────────────────────────────────
+    ui.heading("The agent CLI");
+    let checks = report["checks"].as_array().cloned().unwrap_or_default();
+    let find = |id: &str| checks.iter().find(|c| str_at(c, &["id"]) == id).cloned();
+
+    let cli_ok = find("cli").map(|c| bool_at(&c, &["ok"])).unwrap_or(false);
+    match find("cli") {
+        Some(c) => ui.row(
+            "cli",
+            Mark::from_ok(c["ok"].as_bool()),
+            str_at(&c, &["label"]),
+            str_at(&c, &["detail"]),
+        ),
+        None => ui.row("cli", Mark::Unknown, "not reported", ""),
+    }
+    if !cli_ok {
+        let providers = report["providers"]
+            .as_array()
+            .map(|p| {
+                p.iter()
+                    .map(|v| str_at(v, &["id"]).to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        ui.warn("No agent CLI found, so there is nothing for Wired to keep alive.");
+        ui.note("Install one, then run this again:");
+        ui.note("  npm install -g @anthropic-ai/claude-code");
+        if !providers.is_empty() {
+            ui.note(&format!("Wired can drive: {providers}"));
+        }
+        return Ok(EXIT_UNHEALTHY);
+    }
+
+    // `login` is deliberately tri-state: the backend cannot tell from outside,
+    // so the honest check is whether the agent answers, which happens below.
+    if let Some(login) = find("login") {
+        if login["ok"].as_bool() == Some(false) {
+            ui.warn(str_at(&login, &["detail"]));
+            ui.note("Sign in once, as the account the agent runs as:");
+            ui.note("  sudo -u <user> -H claude      # then Ctrl-D");
+        }
+    }
+
+    // ── 2. a running session ────────────────────────────────────────────
+    ui.heading("The session");
+    let assistant = &report["assistant"];
+    let mut running = bool_at(assistant, &["session_running"]);
+    if running {
+        ui.row(
+            "agent",
+            Mark::Good,
+            str_at(assistant, &["session_provider"]),
+            "running",
+        );
+    } else {
+        ui.row("agent", Mark::Bad, "—", "not running");
+        if confirm(ui, yes, "Start the agent now?")? {
+            let started = api
+                .post("/api/agent/start", json!({ "keep_alive": true }))
+                .await?;
+            running = bool_at(&started, &["assistant", "session_running"]);
+            ui.row(
+                "agent",
+                Mark::from_ok(Some(running)),
+                str_at(&started, &["assistant", "session_provider"]),
+                if running { "started" } else { "did not start" },
+            );
+        } else {
+            skipped.push("starting the agent");
+        }
+    }
+
+    // The only check that proves the CLI is signed in and working, which is why
+    // it is offered rather than assumed: it costs a real round trip to a model.
+    if running && interactive && !yes && confirm(ui, false, "Send it a test message?")? {
+        ui.note("Asking it to say hello — up to 45s.");
+        let reply = api
+            .post(
+                "/api/agent/message",
+                json!({
+                    "text": "Reply with exactly: wired is working",
+                    "submit": true,
+                    "ensure_session": true,
+                    "wait_seconds": 45.0,
+                    "plain": true,
+                }),
+            )
+            .await?;
+        let text = str_at(&reply, &["reply"]);
+        if text.is_empty() {
+            ui.warn("No reply yet. `wired watch` shows what it is doing.");
+            ui.note("If it is asking to be signed in: sudo -u <user> -H claude");
+        } else {
+            ui.row("reply", Mark::Good, text.lines().next().unwrap_or(""), "");
+        }
+    } else if running {
+        skipped.push("the test message");
+    }
+
+    // ── 3. Telegram, and the pairing that follows it ────────────────────
+    if want_telegram {
+        ui.heading("Your phone");
+        let gateway = api.get("/api/gateway/status").await?;
+        let configured = bool_at(&gateway, &["configured"]);
+        let connected = bool_at(&gateway, &["connected"]);
+        let paired = gateway["paired_chats"].as_u64().unwrap_or(0);
+
+        if paired > 0 && connected {
+            ui.row(
+                "telegram",
+                Mark::Good,
+                "connected",
+                &format!("{paired} paired"),
+            );
+        } else if !configured {
+            ui.row("telegram", Mark::None, "no bot token yet", "");
+            if interactive && !yes {
+                ui.note("In Telegram: message @BotFather, send /newbot, answer its two questions.");
+                if confirm(ui, false, "Paste the token it gave you now?")? {
+                    let token = read_token_quietly(ui)?;
+                    api.post(
+                        "/api/gateway/configure",
+                        json!({ "bot_token": token, "enabled": true }),
+                    )
+                    .await?;
+                    let live = wait_for_connect(ui, &api).await?;
+                    if live {
+                        wait_for_pairing(ui, &api, yes).await?;
+                    }
+                } else {
+                    skipped.push("Telegram");
+                }
+            } else {
+                skipped.push("Telegram (needs a token typed in)");
+            }
+        } else if !connected {
+            ui.row("telegram", Mark::Bad, "token set, not connected", "");
+            if let Some(err) = gateway["last_error"].as_str().filter(|e| !e.is_empty()) {
+                ui.warn(err);
+            }
+            ui.note("`wired telegram on` to re-send it, or `wired pair reset` to start over.");
+        } else {
+            ui.row("telegram", Mark::Good, "connected", "no phone paired yet");
+            wait_for_pairing(ui, &api, yes).await?;
+        }
+    }
+
+    // ── 4. what it is already waiting on ────────────────────────────────
+    let health = api.get("/api/health").await?;
+    if !health["pending_prompt"].is_null() {
+        ui.heading("It is waiting for you");
+        let prompt = &health["pending_prompt"];
+        ui.note(str_at(prompt, &["question"]));
+        if confirm(ui, yes, "Allow it?")? {
+            api.post("/api/agent/approve", json!({ "allow": true }))
+                .await?;
+            println!("{}", ui.green("allowed"));
+        } else {
+            skipped.push("the pending approval (`wired approve`)");
+        }
+    }
+
+    // ── what is left ────────────────────────────────────────────────────
+    ui.heading("Where that leaves you");
+    ui.field("folder", str_at(&report, &["folder"]));
+    ui.field(
+        "acting",
+        if bool_at(&report, &["ask_before_acting"]) {
+            "asks first"
+        } else {
+            "freely (auto-approve on)"
+        },
+    );
+    for what in &skipped {
+        ui.note(&format!("skipped: {what}"));
+    }
+    ui.note("`wired status` any time. `wired ask \"…\"` to give it work.");
+    Ok(EXIT_OK)
+}
+
+/// Wait for Telegram to answer. Connecting is a round trip out of the box, so
+/// the reply to `configure` is usually "not yet" rather than "no".
+async fn wait_for_connect(ui: &Ui, api: &Api) -> Result<bool> {
+    for _ in 0..12 {
+        let status = api.get("/api/gateway/status").await?;
+        if bool_at(&status, &["connected"]) {
+            let bot = str_at(&status, &["bot"]);
+            ui.row(
+                "telegram",
+                Mark::Good,
+                &if bot.is_empty() {
+                    "connected".to_string()
+                } else {
+                    format!("connected as @{bot}")
+                },
+                "",
+            );
+            return Ok(true);
+        }
+        if let Some(err) = status["last_error"].as_str().filter(|e| !e.is_empty()) {
+            ui.warn(err);
+            return Ok(false);
+        }
+        tokio::time::sleep(Duration::from_millis(600)).await;
+    }
+    ui.warn("Saved, but Telegram has not answered yet — `wired telegram` to check.");
+    Ok(false)
+}
+
+/// Wait for a phone to ask to be let in, then offer to let it in.
+///
+/// This is the step that made pairing feel like homework: the code appears on
+/// the phone, and until now you had to come back and run two more commands.
+async fn wait_for_pairing(ui: &Ui, api: &Api, yes: bool) -> Result<()> {
+    if yes {
+        ui.note("skipped: pairing (needs the code from your phone)");
+        return Ok(());
+    }
+    ui.note("Now message your bot from your phone — anything will do.");
+    ui.note("Waiting up to two minutes; ctrl-c to stop and pair later with `wired pair`.");
+
+    for _ in 0..60 {
+        let pairings = api.get("/api/gateway/pairings").await?;
+        let pending = pairings["pending"].as_array().cloned().unwrap_or_default();
+        if let Some(first) = pending.first() {
+            let display = str_at(first, &["display"]);
+            let code = str_at(first, &["code"]);
+            ui.row("request", Mark::Unknown, display, code);
+            // Naming who is asking matters: approving is handing that chat the
+            // ability to run commands as the service user.
+            if confirm(ui, false, &format!("Let {display} in?"))? {
+                api.post("/api/gateway/pairings/approve", json!({ "code": code }))
+                    .await?;
+                println!("{}", ui.green("paired"));
+                ui.note("Send it another message — answers come back to your phone.");
+            } else {
+                api.post("/api/gateway/pairings/deny", json!({ "code": code }))
+                    .await?;
+                println!("{}", ui.yellow("denied"));
+            }
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    ui.note("Nothing asked to pair. Message the bot, then `wired pair`.");
+    Ok(())
+}
+
 pub async fn doctor(ui: &Ui, target: &Target, show_log: bool, json_out: bool) -> Result<i32> {
     let api = Api::connect(target).await?;
     let report = api.get("/api/diagnostics").await?;
