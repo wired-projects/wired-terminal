@@ -124,32 +124,35 @@ Windows support, or ship macOS-first and say so on the download page.
 
 ## Automatic updates
 
-Not wired up yet: the Tauri updater plugin refuses to build without a minisign
-public key in `tauri.conf.json`, and the matching private key is a release
-secret that cannot live in a repository. The release workflow already passes
-`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to the
-build, and the publish job already uploads `.sig` files and fills in
-`platforms` the moment they exist — so what is left is steps 1–4:
+Both halves update themselves in place. Neither downloads a file for someone to
+open, which is what they used to do — the app opened a browser at the `.dmg` and
+the CLI printed a URL, and "there is a new version, go and fetch it" is not an
+update.
 
-1. `npm run tauri signer generate -- -w ~/.tauri/wired.key`
-2. Add `tauri-plugin-updater` to `app/src-tauri/Cargo.toml` and
-   `.plugin(tauri_plugin_updater::Builder::new().build())` in `lib.rs`.
-3. Add to `tauri.conf.json`:
-   ```json
-   "plugins": {
-     "updater": {
-       "endpoints": ["https://wired-terminal-releases.wired.dev/updates/latest.json"],
-       "pubkey": "<the public key from step 1>"
-     }
-   }
-   ```
-   and `"createUpdaterArtifacts": true` under `bundle`.
-4. Add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as
-   repository secrets. The first is already set; the password is not, and the
-   build fails on a key that expects one.
+**The desktop app** uses `tauri-plugin-updater`, signed with the minisign key
+shared across the Wired products (`~/.tauri/wired.key`; the public half is in
+`tauri.conf.json`, the private half is the `TAURI_SIGNING_PRIVATE_KEY` secret).
+`createUpdaterArtifacts` makes the build emit a `.app.tar.gz` and a `.sig`,
+`publish-r2.mjs` fills in `platforms`, and the banner's **Install and restart**
+calls the `install_update` command in `lib.rs`. That command lives in Rust
+because the frontend reaches the shell through `window.__TAURI__` and carries no
+Tauri npm packages.
 
-Until then, a non-coder keeps whatever version they installed forever, which is
-the single strongest argument for doing this before a public launch.
+The signature is the load-bearing part: the artefact is verified against the
+public key before a byte is written, so replacing a running application cannot be
+turned into a way to install something else. Break the signing and the button
+does not silently degrade to a download — it refuses.
+
+**The server** uses `wired update`, which fetches the published binaries,
+verifies them by running `wired --version` against what the manifest promised,
+swaps them with a `rename` in the install directory, and restarts the unit. Old
+binaries move aside rather than away, so a failure between the two renames is put
+back instead of leaving a mismatched pair. It never needs a compiler, and it does
+not need root unless the install directory does.
+
+What it will not do is update across a signing boundary it cannot check: with no
+`server` entry for the platform it falls back to re-running the installer from a
+checkout, and failing that it prints the download.
 
 ## Acceptance
 

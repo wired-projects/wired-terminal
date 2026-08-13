@@ -160,10 +160,17 @@ jobs:
           APPLE_SIGNING_IDENTITY: '-'
           #
           # Minisign key for the Tauri updater — a different thing from Apple
-          # and Windows code signing, and free. This one is set, so it is
-          # passed. Its PASSWORD counterpart is not set, and an empty value
-          # would hit the same trap as above, so it is left out entirely.
+          # and Windows code signing, and free. Both halves are passed, and
+          # unlike the certificate case an empty PASSWORD is harmless here: the
+          # key carries no passphrase, so the empty string is the right answer
+          # rather than a broken one. The sibling products sign with this same
+          # key and pass exactly this pair.
+          #
+          # Without these the build produces no `.sig`, publish-r2.mjs leaves
+          # `platforms` empty, and the app's "Install and restart" button has
+          # nothing it can verify — so it would refuse every update.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           tagName: ${{ github.event.inputs.tag || github.ref_name }}

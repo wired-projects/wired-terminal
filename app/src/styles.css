@@ -442,6 +442,15 @@ textarea.field {
   color: var(--text);
 }
 
+/* A failure reported inside a banner that is otherwise good news: an update
+   that would not install still belongs in the update banner, not a second one. */
+.banner-note {
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .toast {
   padding: 9px 11px;
   border: 1px solid transparent;

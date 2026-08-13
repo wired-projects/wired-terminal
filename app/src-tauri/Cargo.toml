@@ -21,6 +21,9 @@ tauri-plugin-notification = "2"
 # Login items on all three platforms; driven from Rust, so the frontend needs
 # no extra JS package for it.
 tauri-plugin-autostart = "2"
+# Replaces the running `.app` in place from a minisign-signed artefact, so an
+# update is a button rather than a browser download and a drag into Applications.
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }

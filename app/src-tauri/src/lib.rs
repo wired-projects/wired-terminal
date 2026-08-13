@@ -293,6 +293,49 @@ fn stop_assistant(endpoint: &Runtime) {
     let _ = stream.take(1024).read_to_string(&mut sink);
 }
 
+/// Download the pending update, replace this `.app` with it, and restart.
+///
+/// Driven from Rust rather than from `@tauri-apps/plugin-updater` because the
+/// frontend reaches the shell through `window.__TAURI__` and carries no Tauri npm
+/// packages; one command keeps it that way.
+///
+/// The artefact's minisign signature is checked against the public key in
+/// `tauri.conf.json` before anything is written, which is the part that makes
+/// replacing a running application safe: an unsigned or tampered archive is
+/// refused, so this cannot be turned into a way to install something else.
+///
+/// Only returns on failure — `restart()` does not come back.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_updater::UpdaterExt;
+
+        let updater = app
+            .updater()
+            .map_err(|e| format!("no updater available: {e}"))?;
+        let Some(update) = updater
+            .check()
+            .await
+            .map_err(|e| format!("could not check for an update: {e}"))?
+        else {
+            return Err("this is already the newest version".into());
+        };
+
+        update
+            .download_and_install(|_chunk, _total| {}, || {})
+            .await
+            .map_err(|e| format!("could not install {}: {e}", update.version))?;
+
+        app.restart();
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        Err("updates are a desktop feature".into())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     wired_backend::init_logging();
@@ -313,8 +356,15 @@ pub fn run() {
             notify,
             set_login_item,
             login_item_enabled,
+            install_update,
         ])
         .setup(|app| {
+            // Desktop only: there is no in-place replacement of a mobile app,
+            // and registering it there fails the build rather than the call.
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             let wanted = wired_backend::settings_from_env()
                 .map(|s| s.port)
                 .unwrap_or(wired_backend::config::DEFAULT_PORT);

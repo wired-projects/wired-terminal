@@ -384,11 +384,32 @@ pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Re
         );
     }
 
+    // Three ways to become the new version, best first: swap the published
+    // binaries, re-run the installer, or — for a desktop install, which is a
+    // signed `.app` rather than two binaries — say where the download is.
+    if let Some(url) = status["server_download"].as_str() {
+        if !confirm(ui, yes, "Install the new binaries and restart the service?")? {
+            ui.note("Left alone.");
+            return Ok(EXIT_OK);
+        }
+        let installed = install_server_binaries(ui, url, latest.unwrap_or("")).await?;
+
+        let sup = Supervisor::for_target(target);
+        if sup.is_managed() {
+            ui.note("Restarting the service.");
+            sup.restart()?;
+        } else {
+            ui.note("Nothing supervises this install, so the new binary starts on your next run.");
+        }
+        ui.note(&format!("Updated to {installed}."));
+        return Ok(EXIT_OK);
+    }
+
     let Some(installer) = source_installer() else {
         let download = status["download"]
             .as_str()
             .unwrap_or("https://terminal.wired.dev/#install");
-        ui.note("This install has no source checkout beside it, so there is nothing to rebuild.");
+        ui.note("No binaries are published for this platform, and there is no checkout to build.");
         ui.note(&format!("Download the new version: {download}"));
         return Ok(EXIT_OK);
     };
@@ -423,6 +444,136 @@ pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Re
     }
     ui.note("Updated. `wired status` to see the new version.");
     Ok(EXIT_OK)
+}
+
+/// Replace the running `wired-backend` and `wired` with the published pair.
+///
+/// The work happens in a directory beside the binaries it replaces, so the swap
+/// is a `rename` within one filesystem: atomic, and never a half-written file
+/// for systemd to start. Unix allows renaming over a running executable, which
+/// is what lets this replace the very CLI that is running it — the old inode
+/// stays alive until the process and the service exit.
+///
+/// Returns what the new binary reports as its version.
+async fn install_server_binaries(ui: &Ui, url: &str, expected: &str) -> Result<String> {
+    let exe =
+        std::env::current_exe().map_err(|e| format!("could not find my own location: {e}"))?;
+    let bin_dir = exe
+        .parent()
+        .ok_or("could not find the directory I am installed in")?;
+
+    // Writability is the real requirement, not root: /opt needs sudo, but an
+    // install under a home directory does not, and demanding root there would
+    // be a lie. Finding out here also beats a permission error three steps into
+    // a tar.
+    let work = bin_dir.join(".wired-update");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!(
+                "{} is not writable by this user: sudo wired update",
+                bin_dir.display()
+            )
+        } else {
+            format!("could not write beside the binaries: {e}")
+        }
+    })?;
+
+    // Anything that fails from here leaves nothing behind but the temp dir.
+    let result = fetch_and_swap(ui, url, expected, bin_dir, &work).await;
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
+
+async fn fetch_and_swap(
+    ui: &Ui,
+    url: &str,
+    expected: &str,
+    bin_dir: &std::path::Path,
+    work: &std::path::Path,
+) -> Result<String> {
+    ui.note("Downloading the new binaries.");
+    let archive = work.join("server.tar.gz");
+    let client = reqwest::Client::builder()
+        // Minutes, not seconds: this is ~10MB over whatever the box has.
+        .timeout(Duration::from_secs(180))
+        .user_agent(concat!("wired/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("could not build an HTTP client: {e}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach {url}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("{url} answered {}", response.status()));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("could not read {url}: {e}"))?;
+    std::fs::write(&archive, &bytes).map_err(|e| format!("could not save the download: {e}"))?;
+
+    let untar = std::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(work)
+        .status()
+        .map_err(|e| format!("could not run tar: {e}"))?;
+    if !untar.success() {
+        return Err("the download did not unpack — a partial or corrupt file".into());
+    }
+
+    let names = ["wired-backend", "wired"];
+    for name in names {
+        if !work.join(name).is_file() {
+            return Err(format!("the archive did not contain {name}"));
+        }
+    }
+
+    // The last point where backing out is free. This catches both a binary that
+    // cannot run here (an older glibc than the build's) and a manifest pointing
+    // at the wrong tarball, before either becomes what systemd starts.
+    let probe = std::process::Command::new(work.join("wired"))
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("the downloaded binary would not run: {e}"))?;
+    if !probe.status.success() {
+        return Err("the downloaded binary would not run on this system".into());
+    }
+    let reported = String::from_utf8_lossy(&probe.stdout).trim().to_string();
+    if !expected.is_empty() && !reported.contains(expected) {
+        return Err(format!(
+            "the download reports itself as {reported:?}, but the manifest promised {expected}"
+        ));
+    }
+
+    // Old versions go aside rather than away, so a failure halfway through two
+    // renames can be put back instead of leaving a mismatched pair installed.
+    let backup = work.join("previous");
+    std::fs::create_dir_all(&backup).map_err(|e| format!("could not stage a rollback: {e}"))?;
+    let mut moved: Vec<&str> = Vec::new();
+    for name in names {
+        let live = bin_dir.join(name);
+        if live.exists() {
+            std::fs::rename(&live, backup.join(name))
+                .map_err(|e| format!("could not move the running {name} aside: {e}"))?;
+        }
+        if let Err(e) = std::fs::rename(work.join(name), &live) {
+            // Put back whatever was already replaced, including this one.
+            for done in moved.iter().copied().chain(std::iter::once(name)) {
+                let saved = backup.join(done);
+                if saved.exists() {
+                    let _ = std::fs::rename(saved, bin_dir.join(done));
+                }
+            }
+            return Err(format!("could not install the new {name}: {e}"));
+        }
+        moved.push(name);
+    }
+
+    Ok(reported)
 }
 
 /// The checkout the running binary was installed from, if there is one.
@@ -719,4 +870,202 @@ pub fn remote(ui: &Ui, config: &mut Config, cmd: &RemoteCmd) -> Result<i32> {
         }
     }
     Ok(EXIT_OK)
+}
+
+/// `fetch_and_swap` replaces the binaries a live service runs, so the thing
+/// worth testing is not the happy path but every way it can refuse: whatever it
+/// rejects must leave the installed pair exactly as it was.
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+    use std::io::Write as _;
+    use std::path::{Path, PathBuf};
+
+    /// A one-shot HTTP server. Serves `body` for the first request and stops,
+    /// which is all a single download needs.
+    fn serve_once(status: &'static str, body: Vec<u8>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                use std::io::Read as _;
+                let mut scratch = [0u8; 2048];
+                let _ = sock.read(&mut scratch);
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes());
+                let _ = sock.write_all(&body);
+                let _ = sock.flush();
+            }
+        });
+        format!("http://127.0.0.1:{port}/server.tar.gz")
+    }
+
+    /// A stand-in binary: a shell script that reports the version it was given.
+    fn fake_binary(path: &Path, version: &str, runs: bool) {
+        let body = if runs {
+            format!("#!/bin/sh\necho \"wired {version}\"\n")
+        } else {
+            // A binary the loader would refuse looks like this from the outside.
+            "#!/bin/sh\necho 'GLIBC_2.35 not found' >&2\nexit 127\n".to_string()
+        };
+        std::fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    struct Fixture {
+        _root: tempdir::TempDir,
+        bin: PathBuf,
+        work: PathBuf,
+    }
+
+    /// An install holding version 1.0.2 of both binaries.
+    fn installed() -> Fixture {
+        let root = tempdir::TempDir::new();
+        let bin = root.path().join("bin");
+        let work = bin.join(".wired-update");
+        std::fs::create_dir_all(&work).unwrap();
+        for name in ["wired", "wired-backend"] {
+            fake_binary(&bin.join(name), "1.0.2", true);
+        }
+        Fixture {
+            _root: root,
+            bin,
+            work,
+        }
+    }
+
+    fn tarball(entries: &[(&str, &str, bool)]) -> Vec<u8> {
+        let dir = tempdir::TempDir::new();
+        for (name, version, runs) in entries {
+            fake_binary(&dir.path().join(name), version, *runs);
+        }
+        let out = dir.path().join("t.tar.gz");
+        let mut cmd = std::process::Command::new("tar");
+        cmd.arg("-czf").arg(&out).arg("-C").arg(dir.path());
+        for (name, _, _) in entries {
+            cmd.arg(name);
+        }
+        assert!(cmd.status().unwrap().success());
+        std::fs::read(&out).unwrap()
+    }
+
+    fn installed_version(bin: &Path, name: &str) -> String {
+        let out = std::process::Command::new(bin.join(name))
+            .arg("--version")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn run(fx: &Fixture, url: &str, expected: &str) -> Result<String> {
+        let ui = Ui::new(true);
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fetch_and_swap(&ui, url, expected, &fx.bin, &fx.work))
+    }
+
+    #[test]
+    fn a_good_download_replaces_both_binaries() {
+        let fx = installed();
+        let url = serve_once(
+            "200 OK",
+            tarball(&[("wired", "1.0.3", true), ("wired-backend", "1.0.3", true)]),
+        );
+        let reported = run(&fx, &url, "1.0.3").unwrap();
+        assert_eq!(reported, "wired 1.0.3");
+        assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.3");
+        assert_eq!(installed_version(&fx.bin, "wired-backend"), "wired 1.0.3");
+    }
+
+    #[test]
+    fn a_version_the_manifest_did_not_promise_is_refused() {
+        let fx = installed();
+        // The tarball is real and runs — it is simply not what was advertised,
+        // which is how a stale alias or a mis-keyed manifest would look.
+        let url = serve_once(
+            "200 OK",
+            tarball(&[("wired", "0.9.0", true), ("wired-backend", "0.9.0", true)]),
+        );
+        let err = run(&fx, &url, "1.0.3").unwrap_err();
+        assert!(err.to_string().contains("manifest promised"), "{err}");
+        assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
+    }
+
+    #[test]
+    fn a_binary_that_cannot_run_here_is_refused() {
+        let fx = installed();
+        let url = serve_once(
+            "200 OK",
+            tarball(&[("wired", "1.0.3", false), ("wired-backend", "1.0.3", true)]),
+        );
+        let err = run(&fx, &url, "1.0.3").unwrap_err();
+        assert!(err.to_string().contains("would not run"), "{err}");
+        assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
+    }
+
+    #[test]
+    fn an_archive_missing_a_binary_is_refused() {
+        let fx = installed();
+        let url = serve_once("200 OK", tarball(&[("wired", "1.0.3", true)]));
+        let err = run(&fx, &url, "1.0.3").unwrap_err();
+        assert!(err.to_string().contains("did not contain"), "{err}");
+        assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
+    }
+
+    #[test]
+    fn a_failed_download_leaves_the_install_alone() {
+        let fx = installed();
+        let url = serve_once("404 Not Found", b"nope".to_vec());
+        let err = run(&fx, &url, "1.0.3").unwrap_err();
+        assert!(err.to_string().contains("404"), "{err}");
+        assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
+    }
+
+    #[test]
+    fn something_that_is_not_an_archive_is_refused() {
+        let fx = installed();
+        let url = serve_once("200 OK", b"this is not a gzip stream".to_vec());
+        let err = run(&fx, &url, "1.0.3").unwrap_err();
+        assert!(err.to_string().contains("did not unpack"), "{err}");
+        assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
+    }
+
+    /// No `tempfile` dependency for six tests; this is the whole of what they need.
+    mod tempdir {
+        use std::path::{Path, PathBuf};
+        pub struct TempDir(PathBuf);
+        impl TempDir {
+            #[allow(clippy::new_without_default)]
+            pub fn new() -> Self {
+                let unique = format!(
+                    "wired-update-test-{}-{:?}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                );
+                let path = std::env::temp_dir().join(unique);
+                std::fs::create_dir_all(&path).unwrap();
+                Self(path)
+            }
+            pub fn path(&self) -> &Path {
+                &self.0
+            }
+        }
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+    }
 }

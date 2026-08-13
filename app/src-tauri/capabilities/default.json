@@ -3,6 +3,7 @@
   "description": "wired terminal default permissions",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "updater:default"
   ]
 }

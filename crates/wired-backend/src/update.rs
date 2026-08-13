@@ -6,9 +6,12 @@
 //! updater would read, so the site, the app and the CLI cannot disagree about
 //! what the current version is.
 //!
-//! This does not install anything. Auto-update needs signed artefacts and a
-//! public key compiled into the app; until that exists, the honest thing is to
-//! say a version is out and point at the download.
+//! This module only answers the question; installing is the caller's job, and
+//! the two callers do it differently. `wired update` swaps the published
+//! `wired-backend` and `wired` binaries in place, which is why `server_download`
+//! exists beside `download`. The desktop app cannot: replacing a signed `.app`
+//! from inside itself is the Tauri updater's job, and that needs signed
+//! artefacts and a public key compiled into the app.
 
 use std::time::Duration;
 
@@ -57,6 +60,11 @@ struct Manifest {
     pub_date: Option<String>,
     #[serde(default)]
     downloads: std::collections::HashMap<String, Download>,
+    /// The headless `wired-backend` + `wired` tarballs, which only some targets
+    /// publish. Absent in every release before 1.0.3, hence `default`: an old
+    /// manifest must still parse, it just offers nothing to install.
+    #[serde(default)]
+    server: std::collections::HashMap<String, Download>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,8 +76,13 @@ pub struct Status {
     pub available: bool,
     pub notes: Option<String>,
     pub pub_date: Option<String>,
-    /// The download for this platform, when the manifest lists one.
+    /// The download for this platform, when the manifest lists one. A desktop
+    /// bundle: something a person opens.
     pub download: Option<String>,
+    /// The headless binaries for this platform, when the release published them.
+    /// This is the one `wired update` can install by itself, with no installer
+    /// re-run and no compile.
+    pub server_download: Option<String>,
     /// False when the check was switched off or the manifest was unreachable.
     pub checked: bool,
     /// Why the check produced nothing. Not an error the caller must handle:
@@ -86,6 +99,7 @@ impl Status {
             notes: None,
             pub_date: None,
             download: None,
+            server_download: None,
             checked: false,
             error: reason,
         }
@@ -163,6 +177,9 @@ pub async fn check() -> Status {
     let download = target_id()
         .and_then(|id| manifest.downloads.get(id))
         .map(|d| d.url.clone());
+    let server_download = target_id()
+        .and_then(|id| manifest.server.get(id))
+        .map(|d| d.url.clone());
 
     Status {
         current: VERSION.to_string(),
@@ -171,6 +188,7 @@ pub async fn check() -> Status {
         notes: manifest.notes,
         pub_date: manifest.pub_date,
         download,
+        server_download,
         checked: true,
         error: None,
     }

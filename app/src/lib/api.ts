@@ -437,6 +437,14 @@ export const api = {
 export const desktop = {
   pickFolder: (start?: string) => invoke<string | null>('pick_folder', { start }) ?? Promise.resolve(null),
   openPath: (path: string) => invoke<void>('open_path', { path }) ?? Promise.resolve(),
+  /**
+   * Replace this app with the new version and restart it. Resolves only on
+   * failure — a successful install never returns, because the process it would
+   * return into has been restarted.
+   *
+   * `null` outside the desktop shell: a browser tab cannot replace itself.
+   */
+  installUpdate: () => invoke<string>('install_update'),
   notify: (title: string, body: string) =>
     invoke<void>('notify', { title, body })?.catch(() => {}) ?? Promise.resolve(),
   setLoginItem: (enabled: boolean) =>

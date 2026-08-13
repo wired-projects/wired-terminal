@@ -337,7 +337,6 @@ Telegram API.
 | | Waiting on |
 |---|---|
 | Windows verification | a Windows machine; the code paths are fixed, not tested |
-| Automatic updates | release signing keys, which a repository cannot hold |
 | Landing page, screenshots, demo GIF | a person at a screen, and somewhere to host |
 
 Start the Apple enrolment now: it is the longest lead time on the list, and

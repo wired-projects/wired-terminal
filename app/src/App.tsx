@@ -12,7 +12,7 @@ import { Welcome } from './components/Welcome';
 import { Wizard } from './components/Wizard';
 import { providerMeta } from './components/ProviderIcon';
 import { useBackendStatus } from './hooks/useBackendStatus';
-import { api, desktop, type ProviderId, type UpdateStatus } from './lib/api';
+import { api, desktop, isDesktopApp, type ProviderId, type UpdateStatus } from './lib/api';
 import { explain, type Remedy } from './lib/errors';
 
 /**
@@ -187,6 +187,25 @@ export default function App() {
     };
   }, [online]);
 
+  // Installing replaces this app and restarts it, so a success never comes
+  // back here — only a failure does, and that has to be said rather than
+  // leaving the button spinning forever.
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const installUpdate = useCallback(async () => {
+    setUpdating(true);
+    setUpdateError(null);
+    try {
+      await desktop.installUpdate();
+      // Reached only if the restart did not happen.
+      setUpdateError('The update installed but the app did not restart — quit and reopen it.');
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUpdating(false);
+    }
+  }, []);
+
   // ── notifications ────────────────────────────────────────────────────
   const notifiedFor = useRef<number | null>(null);
   useEffect(() => {
@@ -295,19 +314,32 @@ export default function App() {
           <span>
             <strong>Version {update.latest} is out.</strong> This is {update.current}.
           </span>
+          {updateError && <span className="banner-note">{updateError}</span>}
           <span className="button-row">
-            {update.download && (
+            {isDesktopApp() ? (
               <button
                 type="button"
-                className="btn btn-secondary"
-                onClick={() => void desktop.openPath(update.download!)}
+                className="btn btn-primary"
+                disabled={updating}
+                onClick={() => void installUpdate()}
               >
-                Download it
+                {updating ? 'Installing…' : 'Install and restart'}
               </button>
+            ) : (
+              update.download && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => void desktop.openPath(update.download!)}
+                >
+                  Download it
+                </button>
+              )
             )}
             <button
               type="button"
               className="btn btn-ghost"
+              disabled={updating}
               onClick={() => setUpdateDismissed(true)}
             >
               Later
