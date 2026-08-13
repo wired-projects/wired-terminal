@@ -632,6 +632,7 @@ async fn fetch_and_swap(
 pub async fn setup(
     ui: &Ui,
     target: &Target,
+    sup: &Supervisor,
     yes: bool,
     want_telegram: bool,
     json_out: bool,
@@ -686,11 +687,20 @@ pub async fn setup(
 
     // `login` is deliberately tri-state: the backend cannot tell from outside,
     // so the honest check is whether the agent answers, which happens below.
+    // On a rootless install the agent runs as whoever is reading this, so
+    // `sudo -u` would be wrong twice: unnecessary, and pointing at a home that
+    // is not the one holding the credentials.
+    let own_account = matches!(sup, Supervisor::Systemd { user: true, .. });
+    let signin_hint = if own_account {
+        "  claude                        # then Ctrl-D"
+    } else {
+        "  sudo -u <user> -H claude      # then Ctrl-D"
+    };
     if let Some(login) = find("login") {
         if login["ok"].as_bool() == Some(false) {
             ui.warn(str_at(&login, &["detail"]));
             ui.note("Sign in once, as the account the agent runs as:");
-            ui.note("  sudo -u <user> -H claude      # then Ctrl-D");
+            ui.note(signin_hint);
         }
     }
 
@@ -742,7 +752,10 @@ pub async fn setup(
         let text = str_at(&reply, &["reply"]);
         if text.is_empty() {
             ui.warn("No reply yet. `wired watch` shows what it is doing.");
-            ui.note("If it is asking to be signed in: sudo -u <user> -H claude");
+            ui.note(&format!(
+                "If it is asking to be signed in:{}",
+                signin_hint.trim_end_matches("      # then Ctrl-D")
+            ));
         } else {
             ui.row("reply", Mark::Good, text.lines().next().unwrap_or(""), "");
         }

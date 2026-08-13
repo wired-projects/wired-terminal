@@ -115,7 +115,10 @@ impl Supervisor {
                 host,
                 ssh_port,
                 unit,
-            } => ssh_run(host, *ssh_port, &["sudo", "systemctl", "start", unit], true),
+            } => {
+                let command = remote_systemctl_command(unit, "start");
+                ssh_run(host, *ssh_port, &[command.as_str()], true)
+            }
             Supervisor::Unmanaged => Err(unmanaged()),
         }
     }
@@ -128,7 +131,10 @@ impl Supervisor {
                 host,
                 ssh_port,
                 unit,
-            } => ssh_run(host, *ssh_port, &["sudo", "systemctl", "stop", unit], true),
+            } => {
+                let command = remote_systemctl_command(unit, "stop");
+                ssh_run(host, *ssh_port, &[command.as_str()], true)
+            }
             Supervisor::Unmanaged => Err(unmanaged()),
         }
     }
@@ -145,12 +151,10 @@ impl Supervisor {
                 host,
                 ssh_port,
                 unit,
-            } => ssh_run(
-                host,
-                *ssh_port,
-                &["sudo", "systemctl", "restart", unit],
-                true,
-            ),
+            } => {
+                let command = remote_systemctl_command(unit, "restart");
+                ssh_run(host, *ssh_port, &[command.as_str()], true)
+            }
             Supervisor::Unmanaged => Err(unmanaged()),
         }
     }
@@ -176,12 +180,17 @@ impl Supervisor {
                 ssh_port,
                 unit,
             } => {
-                let n = lines.to_string();
-                let mut args = vec!["journalctl", "-u", unit.as_str(), "-n", n.as_str()];
-                if follow {
-                    args.push("-f");
-                }
-                ssh_run(host, *ssh_port, &args, follow)
+                // A user unit logs to the user journal, where plain `-u` finds
+                // nothing at all rather than erroring — so the far side picks
+                // the journal the same way it picks the manager.
+                let q = shell_quote(unit);
+                let command = format!(
+                    "J=journalctl; \
+                     [ \"$(systemctl show -p LoadState --value {q} 2>/dev/null)\" = loaded ] || J=\"journalctl --user\"; \
+                     $J -u {q} -n {lines}{}",
+                    if follow { " -f" } else { "" }
+                );
+                ssh_run(host, *ssh_port, &[command.as_str()], follow)
             }
         }
     }
@@ -238,6 +247,22 @@ fn show_args(unit: &str) -> Vec<&str> {
     ]
 }
 
+/// A shell line that runs `verb` against whichever systemd owns the unit there.
+///
+/// `wired --remote` cannot know whether the far side is a root install or a
+/// rootless one, and guessing wrong fails in a way that reads like the service is
+/// missing: `sudo systemctl --user` talks to *root's* session manager, which has
+/// never heard of the unit, and plain `systemctl` on a user unit reports
+/// not-found. So the decision is made over there, in one command, from the only
+/// thing that can answer it — whether the system manager has the unit loaded.
+fn remote_systemctl_command(unit: &str, verb: &str) -> String {
+    let q = shell_quote(unit);
+    format!(
+        "if [ \"$(systemctl show -p LoadState --value {q} 2>/dev/null)\" = loaded ]; \
+         then sudo systemctl {verb} {q}; else systemctl --user {verb} {q}; fi"
+    )
+}
+
 /// Wrap for `sh -c`, which is what ssh hands its argument to.
 fn shell_quote(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', r"'\''"))
@@ -249,9 +274,14 @@ fn shell_quote(raw: &str) -> String {
 /// *that machine* booted — so converting it with our `/proc/uptime` would be
 /// wrong on another Linux box and impossible on a mac, which has no such file.
 fn remote_state_command(unit: &str) -> String {
+    let q = shell_quote(unit);
+    // Same reasoning as `remote_systemctl_command`: ask the far side which
+    // manager has it, then read the properties from that one. Without this a
+    // rootless install reports "not installed" rather than its actual state.
     format!(
-        "systemctl show {} {}; printf 'BootUptime=%s\\n' \"$(cut -d' ' -f1 /proc/uptime)\"",
-        shell_quote(unit),
+        "M=systemctl; \
+         [ \"$(systemctl show -p LoadState --value {q} 2>/dev/null)\" = loaded ] || M=\"systemctl --user\"; \
+         $M show {q} {}; printf 'BootUptime=%s\\n' \"$(cut -d' ' -f1 /proc/uptime)\"",
         show_args(unit)[3..].join(" ")
     )
 }
@@ -732,6 +762,40 @@ fn ssh_capture(host: &str, ssh_port: Option<u16>, argv: &[&str]) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The remote commands are built by string formatting and run through `sh -c`
+    // on someone else's machine, where a quoting mistake is a confusing failure
+    // rather than a compile error.
+
+    #[test]
+    fn a_remote_verb_asks_which_manager_owns_the_unit() {
+        let command = remote_systemctl_command("wired-terminal", "restart");
+        // Both halves present, and the system one gated behind the LoadState test.
+        assert!(command.contains("systemctl show -p LoadState"), "{command}");
+        assert!(command.contains("sudo systemctl restart"), "{command}");
+        assert!(command.contains("systemctl --user restart"), "{command}");
+        // `sudo systemctl --user` is the combination that talks to root's own
+        // session manager and finds nothing; it must never be emitted.
+        assert!(!command.contains("sudo systemctl --user"), "{command}");
+    }
+
+    #[test]
+    fn a_remote_unit_name_cannot_break_out() {
+        let command = remote_systemctl_command("evil; rm -rf /", "stop");
+        assert!(!command.contains("; rm -rf /;"), "{command}");
+        assert!(command.contains(r"'evil; rm -rf /'"), "{command}");
+    }
+
+    #[test]
+    fn the_remote_state_command_reads_from_whichever_answered() {
+        let command = remote_state_command("wired-terminal");
+        assert!(command.contains("M=systemctl"), "{command}");
+        assert!(command.contains(r#"M="systemctl --user""#), "{command}");
+        assert!(command.contains("$M show"), "{command}");
+        // Still asks for the far side's own clock, which is what makes uptime
+        // meaningful across machines.
+        assert!(command.contains("BootUptime"), "{command}");
+    }
 
     fn lines(raw: &str) -> Vec<String> {
         raw.lines().map(str::to_string).collect()
