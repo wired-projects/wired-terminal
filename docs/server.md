@@ -43,24 +43,25 @@ sudo bash scripts/install-ubuntu.sh
 The script self-elevates, so `sudo` is belt-and-braces. It downloads the
 published `wired-backend` and `wired` binaries, writes
 `/etc/wired-terminal/wired.env`, installs a systemd unit, starts it, and waits
-for `/healthz` to answer. That takes seconds, and it leaves no Rust toolchain
-and no build tools behind.
+for `/healthz` to answer. That takes seconds.
 
-It compiles instead — installing `build-essential` and rustup first, which is
-the minutes-long path — only when it has to:
+**It never compiles anything.** No `build-essential`, no rustup, no cargo, no
+Rust toolchain left behind — a server needs none of that to *run* Wired, and
+installing a compiler to produce a binary that is already published is minutes of
+work for nothing. Building is a developer task; see
+[Upgrading](#5-upgrading) for the one case where you do it yourself.
+
+So there are exactly two sources, and if neither works it stops rather than
+installing half of something:
 
 | | |
 |---|---|
-| Not x86_64 or arm64 | binaries are published for those two only |
-| No download | the bucket is unreachable, or the release has no server tarball |
-| Won't run here | the tarball is built on Ubuntu 22.04, so glibc 2.35 is its floor |
-| You asked | `--from-source` |
+| The published binary | `linux-x86_64` and `linux-aarch64`, chosen by `uname -m` |
+| `--binary PATH` | one you built elsewhere — the only option on any other architecture |
 
-The third is worth knowing about: the script runs `wired --version` on what it
-downloaded before trusting it, so an older distro falls back to compiling rather
-than handing systemd a binary the dynamic loader will refuse. Compiling needs a
-checkout; with none, and no usable download, it stops and says so rather than
-installing half of something.
+Before trusting a download it runs `wired --version` on it, which is what catches
+a tarball an older distro cannot load: the build's glibc floor is 2.35 (Ubuntu
+22.04), and the alternative is finding out after systemd has been pointed at it.
 
 Point it elsewhere with `--server-url URL`, or `WIRED_RELEASES_BASE` to swap the
 whole bucket for a mirror.
@@ -105,21 +106,11 @@ ssh you@server 'cd ~/wired-terminal && sudo bash scripts/install-ubuntu.sh --use
 
 ### If the box is small
 
-The release build wants roughly a gigabyte of RAM per core. On a 1–2 GB
-instance it can be killed by the OOM reaper partway through, which looks like
-the build "just stopping". Either add swap first:
-
-```bash
-sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
-sudo mkswap /swapfile && sudo swapon /swapfile
-```
-
-…or don't build on the server at all — build somewhere else and install the
-binary (see [Upgrading](#5-upgrading-and-rebuilding)):
-
-```bash
-sudo bash scripts/install-ubuntu.sh --binary ./wired-backend
-```
+Nothing here is memory-hungry any more. The install downloads a ~10 MB tarball
+and unpacks two binaries, so a 512 MB instance is fine. Earlier versions
+compiled on the box and wanted about a gigabyte of RAM per core, which the OOM
+reaper would take on a 1 GB VPS partway through — that is what the swap advice
+you may have read elsewhere was for, and it no longer applies.
 
 ### What it wrote
 
@@ -271,28 +262,45 @@ password to the chat; treat it that way.
 
 ### 4.2 Hand it to the server
 
-One call sets the token, switches the bridge on, and reconnects:
+```bash
+wired telegram on
+```
+
+It prompts for the token without echoing it, sets it, switches the bridge on,
+waits for Telegram to answer, and prints what to do next. Nothing lands in
+`~/.bash_history` and nothing appears in `ps`, which is why this is the form to
+use over SSH rather than passing the token as an argument.
+
+`wired telegram` on its own says what the bridge is doing. `wired telegram off`
+stops it and keeps the token, so `on` reconnects; `wired pair reset` is the one
+that forgets the token entirely.
+
+Piping works too, for a token you already keep somewhere safe:
+
+```bash
+pass show wired/bot-token | wired telegram on
+```
+
+<details>
+<summary>The same by hand</summary>
 
 ```bash
 curl -sX POST localhost:8000/api/gateway/configure \
   -H 'Content-Type: application/json' \
   -d '{"bot_token":"8000000000:AAF...","enabled":true}'
-```
-
-Both fields matter. The bridge stays down if `enabled` is false *or* the token
-is empty, and it will not tell you which — check:
-
-```bash
 curl -s localhost:8000/api/gateway/status | python3 -m json.tool
 ```
 
-You want `"configured": true`, `"enabled": true`, `"connected": true`, and
-`"bot"` set to the username you chose. If `connected` is false, `last_error`
-holds Telegram's own words — `Unauthorized` means a wrong or revoked token.
+Both fields matter: the bridge stays down if `enabled` is false *or* the token
+is empty, and it will not tell you which. You want `"configured": true`,
+`"enabled": true`, `"connected": true`, and `"bot"` set to the username you
+chose. If `connected` is false, `last_error` holds Telegram's own words —
+`Unauthorized` means a wrong or revoked token.
 
-> Shell history: that command puts the bot token in `~/.bash_history`. Prefix
-> it with a space (with `HISTCONTROL=ignorespace` set), or read the token from
-> a file, if that matters to you.
+This puts the token in your shell history; prefix the line with a space, with
+`HISTCONTROL=ignorespace` set.
+
+</details>
 
 ### 4.3 Pair your phone
 
@@ -409,38 +417,44 @@ absolute minimum.
 
 ---
 
-## 5. Upgrading and rebuilding
-
-Re-running the installer upgrades in place: it stops the service, rebuilds,
-replaces the binary, and starts it again. Settings in `wired.env` survive.
+## 5. Upgrading
 
 ```bash
-cd ~/wired-terminal && git pull
-sudo bash scripts/install-ubuntu.sh --user wired --skip-node --skip-cli
+sudo wired update
 ```
 
-**The trap:** the installer runs as root, so `cargo` runs as root, so
-`crates/wired-backend/target/` ends up owned by root. A later `cargo build` as
-yourself then fails with permission errors on a directory you appear to own the
-parent of. Two ways out:
+It asks the manifest what is published, downloads the binaries for this
+architecture, runs `wired --version` on them to check they are what was promised
+and that they run here at all, swaps them with a `rename` inside the install
+directory, and restarts the unit. Seconds, no compiler, and settings in
+`wired.env` survive.
+
+The swap is a rename rather than a copy so it is atomic: systemd can never be
+started on a half-written file. The old pair moves aside rather than away, so a
+failure between the two renames is put back instead of leaving a mismatched
+install. `sudo` is needed because `/opt` is root-owned — writability is the
+requirement, not root as such, so an install under a home directory does not
+need it.
+
+`wired update --check` changes nothing and exits 2 when something is out, which
+is what makes it usable from cron.
+
+### When there is no published build
+
+Binaries are published for `linux-x86_64` and `linux-aarch64`. On anything else
+`wired update` says so and stops, because there is nothing it can honestly do:
+the installer no longer compiles, so re-running it would not help. Build it
+yourself and hand it over:
 
 ```bash
-# keep building as root — needs rustup's PATH, which is under /root
-sudo env PATH="/root/.cargo/bin:$PATH" cargo build --release \
-  --manifest-path ~/wired-terminal/crates/wired-backend/Cargo.toml
-
-# or hand the tree back to yourself, once
-sudo chown -R $USER:$USER ~/wired-terminal/crates/wired-backend/target
+# on a machine with Rust, for the server's architecture (check with `uname -m`)
+cargo build --release --manifest-path crates/wired-backend/Cargo.toml
+scp target/release/wired-backend target/release/wired you@server:~/
+ssh you@server 'sudo bash /path/to/scripts/install-ubuntu.sh --binary ~/wired-backend'
 ```
 
-Building elsewhere and shipping the binary avoids all of it — and avoids
-keeping a Rust toolchain on the server. Build for the server's architecture
-(most cheap ARM instances are `aarch64`; check with `uname -m`):
-
-```bash
-scp ./wired-backend you@server:~/
-ssh you@server 'sudo bash ~/wired-terminal/scripts/install-ubuntu.sh --binary ~/wired-backend'
-```
+`--binary` takes the `wired` CLI from the same directory when it finds one, which
+is why both files are copied.
 
 ---
 

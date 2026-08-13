@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::args::{Pair, RemoteCmd, ScheduleCmd};
+use super::args::{Pair, RemoteCmd, ScheduleCmd, Telegram};
 use super::client::{Api, Result};
 use super::profile::{Config, Remote, Target};
 use super::service::Supervisor;
@@ -405,147 +405,25 @@ pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Re
         return Ok(EXIT_OK);
     }
 
-    let Some(installer) = source_installer() else {
-        let download = status["download"]
-            .as_str()
-            .unwrap_or("https://terminal.wired.dev/#install");
-        ui.note("No binaries are published for this platform, and there is no checkout to build.");
-        ui.note(&format!("Download the new version: {download}"));
-        return Ok(EXIT_OK);
-    };
-
-    // `installer` is `<src>/scripts/install-ubuntu.sh`.
-    let src_dir = installer
-        .parent()
-        .and_then(|p| p.parent())
-        .ok_or("could not find the checkout around the installer")?;
-
-    if !confirm(
-        ui,
-        yes,
-        &format!(
-            "Update the checkout to v{} and rebuild? ({})",
-            latest.unwrap_or("latest"),
-            src_dir.display()
-        ),
-    )? {
-        ui.note("Left alone.");
-        return Ok(EXIT_OK);
-    }
-
-    // Updating the checkout is the whole point, and skipping it was a bug that
-    // could not fix itself: `install-ubuntu.sh` contains no git at all — it
-    // builds whatever `$SRC_DIR` already holds — so re-running it against a
-    // stale checkout recompiles the version already installed and restarts onto
-    // it. Every `wired update` on such a box offered that same rebuild forever.
-    refresh_checkout(ui, src_dir, latest)?;
-
-    ui.note("Running the installer.");
-    let status = std::process::Command::new("sudo")
-        .arg("bash")
-        .arg(&installer)
-        .status()
-        .map_err(|e| format!("could not run {}: {e}", installer.display()))?;
-
-    if !status.success() {
-        return Err(format!(
-            "{} exited with {}",
-            installer.display(),
-            status.code().unwrap_or(-1)
-        ));
-    }
-    ui.note("Updated. `wired status` to see the new version.");
+    // Nothing published for this platform. There used to be a rebuild path
+    // here — update the checkout, re-run the installer, compile — and it is gone
+    // along with the installer's compiler: `install-ubuntu.sh` no longer builds
+    // anything, so re-running it would either download the same binary this
+    // command already could not find, or stop and say so. Offering a rebuild
+    // that cannot happen is worse than naming the one thing that works.
+    let download = status["download"]
+        .as_str()
+        .unwrap_or("https://terminal.wired.dev/#install");
+    ui.note(&format!(
+        "No binaries are published for this platform ({} {}).",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+    ui.note("Build one from a checkout, then install it:");
+    ui.note("  cargo build --release --manifest-path crates/wired-backend/Cargo.toml");
+    ui.note("  sudo bash scripts/install-ubuntu.sh --binary <path to wired-backend>");
+    ui.note(&format!("Or take the desktop build: {download}"));
     Ok(EXIT_OK)
-}
-
-/// Move the checkout to the published tag, so rebuilding from it produces
-/// something newer than what is already installed.
-///
-/// Refuses rather than guesses. A checkout that is not a git repository, or has
-/// edits in it, or has no such tag, is one this cannot safely move — and saying
-/// so beats both silently rebuilding the old version and quietly discarding
-/// someone's work.
-fn refresh_checkout(ui: &Ui, src: &std::path::Path, want: Option<&str>) -> Result<()> {
-    let Some(want) = want.filter(|v| !v.is_empty()) else {
-        return Err("the manifest did not say which version to move the checkout to".into());
-    };
-    if !src.join(".git").exists() {
-        return Err(format!(
-            "{} is not a git checkout, so a rebuild there cannot produce {want}.\n               \
-             Install the published binaries instead, or re-clone the repository.",
-            src.display()
-        ));
-    }
-
-    // Someone's uncommitted work is not this command's to move or discard.
-    if !git(src, &["status", "--porcelain"])?.trim().is_empty() {
-        return Err(format!(
-            "{} has uncommitted changes — update it yourself, then run this again.",
-            src.display()
-        ));
-    }
-
-    ui.note(&format!("Updating the checkout to v{want}."));
-    git(src, &["fetch", "--tags", "--quiet"])?;
-    git(src, &["checkout", "--quiet", &format!("v{want}")])?;
-    Ok(())
-}
-
-/// Run git in `src`, with its stderr as the error — git already explains itself
-/// better than a wrapper would.
-///
-/// Escalates the same way the installer call does. On a normal server install
-/// the checkout is root-owned, so inspecting it as the invoking user trips git's
-/// dubious-ownership guard — a root-owned repository read by a plain user is
-/// precisely what that guard exists to complain about. Running the installer
-/// through `sudo` while reading the checkout without it was inconsistent, and
-/// the inconsistency was the bug: `wired update` failed on exactly the layout
-/// `install-ubuntu.sh` creates.
-fn git(src: &std::path::Path, args: &[&str]) -> Result<String> {
-    // Only when the checkout is somebody else's, which is the same condition
-    // git checks. Escalating unconditionally would mean shelling out to `sudo`
-    // for a repository we already own — a password prompt in the middle of a
-    // read, and tests that need root to inspect their own temp directory.
-    #[cfg(unix)]
-    let escalate = {
-        use std::os::unix::fs::MetadataExt as _;
-        let me = unsafe { libc::geteuid() };
-        me != 0
-            && std::fs::metadata(src)
-                .map(|m| m.uid() != me)
-                .unwrap_or(false)
-    };
-    #[cfg(not(unix))]
-    let escalate = false;
-
-    let mut cmd = if escalate {
-        let mut cmd = std::process::Command::new("sudo");
-        cmd.arg("git");
-        cmd
-    } else {
-        std::process::Command::new("git")
-    };
-    let program = if escalate { "sudo git" } else { "git" };
-
-    let out = cmd
-        .arg("-C")
-        .arg(src)
-        .args(args)
-        .output()
-        .map_err(|e| format!("could not run {program}: {e}"))?;
-    if !out.status.success() {
-        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(format!(
-            "git {} failed: {}",
-            args[0],
-            if why.is_empty() {
-                "no reason given".into()
-            } else {
-                why
-            }
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 /// Replace the running `wired-backend` and `wired` with the published pair.
@@ -678,23 +556,6 @@ async fn fetch_and_swap(
     Ok(reported)
 }
 
-/// The checkout the running binary was installed from, if there is one.
-///
-/// A server install puts the CLI at `<dir>/bin/wired` and the source at
-/// `<dir>/src`, so the binary's own path answers this without a config file.
-fn source_installer() -> Option<std::path::PathBuf> {
-    let candidate = match std::env::var_os("WIRED_SRC_DIR") {
-        Some(dir) => std::path::PathBuf::from(dir),
-        None => std::env::current_exe()
-            .ok()?
-            .parent()?
-            .parent()?
-            .join("src"),
-    };
-    let installer = candidate.join("scripts/install-ubuntu.sh");
-    installer.is_file().then_some(installer)
-}
-
 pub async fn doctor(ui: &Ui, target: &Target, show_log: bool, json_out: bool) -> Result<i32> {
     let api = Api::connect(target).await?;
     let report = api.get("/api/diagnostics").await?;
@@ -757,6 +618,182 @@ pub async fn doctor(ui: &Ui, target: &Target, show_log: bool, json_out: bool) ->
     }
 
     Ok(if failed { EXIT_UNHEALTHY } else { EXIT_OK })
+}
+
+/// Read a line without echoing it, so a token pasted at a prompt does not stay
+/// on the screen. Falls back to a visible read when stdin is not a terminal,
+/// which is what makes `echo $TOKEN | wired telegram on` work in a script.
+fn read_token_quietly(ui: &Ui) -> Result<String> {
+    use std::io::{BufRead, Write};
+
+    let stdin = std::io::stdin();
+    let interactive = std::io::IsTerminal::is_terminal(&stdin);
+    if interactive {
+        print!("{} ", ui.dim("Bot token from @BotFather:"));
+        let _ = std::io::stdout().flush();
+    }
+
+    // Turning the echo off is worth the unsafe: the alternative is a bot token
+    // sitting in the scrollback of a shared terminal.
+    #[cfg(unix)]
+    let restore = {
+        use std::os::fd::AsRawFd as _;
+        let fd = stdin.as_raw_fd();
+        let mut term: libc::termios = unsafe { std::mem::zeroed() };
+        if interactive && unsafe { libc::tcgetattr(fd, &mut term) } == 0 {
+            let original = term;
+            term.c_lflag &= !libc::ECHO;
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) };
+            Some((fd, original))
+        } else {
+            None
+        }
+    };
+
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+
+    #[cfg(unix)]
+    if let Some((fd, original)) = restore {
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
+        println!();
+    }
+
+    read.map_err(|e| format!("could not read the token: {e}"))?;
+    let token = line.trim().to_string();
+    if token.is_empty() {
+        return Err("no token given".into());
+    }
+    Ok(token)
+}
+
+pub async fn telegram(ui: &Ui, target: &Target, cmd: &Telegram, json_out: bool) -> Result<i32> {
+    // Prompt for and check the token before opening anything, so a typo is
+    // answered as a typo rather than hidden behind whatever the network says —
+    // and so a malformed token is never put on the wire at all.
+    let token = match cmd {
+        Telegram::On(given) => {
+            let token = match given {
+                Some(token) => token.trim().to_string(),
+                None => read_token_quietly(ui)?,
+            };
+            // BotFather's tokens are `<digits>:<secret>`. Saying so now beats a
+            // round trip that comes back as Telegram's own "Unauthorized".
+            if !token.split_once(':').is_some_and(|(id, secret)| {
+                !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) && secret.len() > 8
+            }) {
+                return Err(
+                    "that does not look like a bot token — @BotFather gives you something like 8123456789:AAH…".into(),
+                );
+            }
+            Some(token)
+        }
+        _ => None,
+    };
+
+    let api = Api::connect(target).await?;
+
+    let show = |status: &Value| {
+        let connected = bool_at(status, &["connected"]);
+        let enabled = bool_at(status, &["enabled"]);
+        let configured = bool_at(status, &["configured"]);
+        let bot = str_at(status, &["bot"]);
+        let (mark, detail) = match (configured, enabled, connected) {
+            (false, _, _) => (Mark::None, "no bot token yet".to_string()),
+            (_, false, _) => (Mark::None, "off".to_string()),
+            (_, _, true) => (
+                Mark::Good,
+                if bot.is_empty() {
+                    "connected".to_string()
+                } else {
+                    format!("connected as @{bot}")
+                },
+            ),
+            (_, _, false) => (Mark::Bad, "not connected".to_string()),
+        };
+        ui.row("telegram", mark, &detail, "");
+        if let Some(err) = status["last_error"].as_str().filter(|e| !e.is_empty()) {
+            ui.warn(err);
+        }
+        let paired = status["paired_chats"].as_u64().unwrap_or(0);
+        ui.field("paired chats", &paired.to_string());
+    };
+
+    match cmd {
+        Telegram::Off => {
+            // The token stays: switching the bridge off is not the same as
+            // throwing away the bot, and `pair reset` is the one that forgets.
+            let status = api
+                .post("/api/gateway/configure", json!({ "enabled": false }))
+                .await?;
+            if json_out {
+                ui.json(&status);
+                return Ok(EXIT_OK);
+            }
+            println!("{}", ui.yellow("telegram off"));
+            ui.note("The token is kept — `wired telegram on` reconnects.");
+            Ok(EXIT_OK)
+        }
+
+        Telegram::Show => {
+            let status = api.get("/api/gateway/status").await?;
+            if json_out {
+                ui.json(&status);
+                return Ok(EXIT_OK);
+            }
+            show(&status);
+            if !bool_at(&status, &["configured"]) {
+                ui.note("No bot yet: message @BotFather in Telegram, /newbot, then");
+                ui.note("  wired telegram on");
+            } else if !bool_at(&status, &["enabled"]) {
+                ui.note("Switch it back on with `wired telegram on`.");
+            } else if status["paired_chats"].as_u64().unwrap_or(0) == 0 {
+                ui.note("Message the bot from your phone, then `wired pair`.");
+            }
+            Ok(
+                if bool_at(&status, &["connected"]) || !bool_at(&status, &["enabled"]) {
+                    EXIT_OK
+                } else {
+                    EXIT_UNHEALTHY
+                },
+            )
+        }
+
+        Telegram::On(_) => {
+            let token = token.expect("On always resolves a token above");
+            let status = api
+                .post(
+                    "/api/gateway/configure",
+                    json!({ "bot_token": token, "enabled": true }),
+                )
+                .await?;
+            if json_out {
+                ui.json(&status);
+                return Ok(EXIT_OK);
+            }
+
+            // Connecting is a round trip to Telegram, so the answer to the
+            // configure call is usually "not yet" rather than "no".
+            let mut status = status;
+            for _ in 0..10 {
+                if bool_at(&status, &["connected"]) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                status = api.get("/api/gateway/status").await?;
+            }
+
+            show(&status);
+            if bool_at(&status, &["connected"]) {
+                ui.note("Now message the bot from your phone — it answers with a code.");
+                ui.note("Then `wired pair` to see it, and `wired pair approve <code>`.");
+                Ok(EXIT_OK)
+            } else {
+                ui.note("Saved, but not connected yet. `wired telegram` to check again.");
+                Ok(EXIT_UNHEALTHY)
+            }
+        }
+    }
 }
 
 pub async fn pair(ui: &Ui, target: &Target, cmd: &Pair, json_out: bool) -> Result<i32> {
@@ -1139,75 +1176,6 @@ mod update_tests {
         let err = run(&fx, &url, "1.0.3").unwrap_err();
         assert!(err.to_string().contains("did not unpack"), "{err}");
         assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
-    }
-
-    // ── refresh_checkout ────────────────────────────────────────────────
-    // The rebuild fallback used to skip this entirely, which made it a loop: a
-    // stale checkout rebuilds the installed version and offers the same update
-    // again next time. These cover the cases where moving it is not safe.
-
-    fn git_in(dir: &Path, args: &[&str]) {
-        let ok = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap()
-            .status
-            .success();
-        assert!(ok, "git {args:?} failed");
-    }
-
-    /// A repo with one commit tagged v1.0.2, and v1.0.3 never created.
-    fn checkout() -> tempdir::TempDir {
-        let dir = tempdir::TempDir::new();
-        git_in(dir.path(), &["init", "--quiet"]);
-        git_in(dir.path(), &["config", "user.email", "t@example.com"]);
-        git_in(dir.path(), &["config", "user.name", "t"]);
-        std::fs::write(dir.path().join("file"), "one").unwrap();
-        git_in(dir.path(), &["add", "."]);
-        git_in(dir.path(), &["commit", "--quiet", "-m", "one"]);
-        git_in(dir.path(), &["tag", "v1.0.2"]);
-        dir
-    }
-
-    #[test]
-    fn a_directory_that_is_not_a_checkout_is_refused() {
-        let dir = tempdir::TempDir::new();
-        let err = refresh_checkout(&Ui::new(true), dir.path(), Some("1.0.3")).unwrap_err();
-        assert!(err.to_string().contains("not a git checkout"), "{err}");
-    }
-
-    #[test]
-    fn uncommitted_work_is_never_moved() {
-        let dir = checkout();
-        std::fs::write(dir.path().join("file"), "edited").unwrap();
-        let err = refresh_checkout(&Ui::new(true), dir.path(), Some("1.0.3")).unwrap_err();
-        assert!(err.to_string().contains("uncommitted changes"), "{err}");
-        // The edit is still there: refusing must not be destructive.
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("file")).unwrap(),
-            "edited"
-        );
-    }
-
-    #[test]
-    fn a_version_with_no_such_tag_is_refused() {
-        let dir = checkout();
-        // No remote either, so the fetch is the first thing that cannot work —
-        // whichever step fails, the point is that it does not rebuild anyway.
-        let err = refresh_checkout(&Ui::new(true), dir.path(), Some("1.0.3")).unwrap_err();
-        assert!(err.to_string().starts_with("git "), "{err}");
-    }
-
-    #[test]
-    fn a_manifest_without_a_version_cannot_move_anything() {
-        let dir = checkout();
-        let err = refresh_checkout(&Ui::new(true), dir.path(), None).unwrap_err();
-        assert!(
-            err.to_string().contains("did not say which version"),
-            "{err}"
-        );
     }
 
     /// No `tempfile` dependency for six tests; this is the whole of what they need.

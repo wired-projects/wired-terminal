@@ -113,9 +113,9 @@ unhealthy — which is what makes `wired doctor` usable from cron.
 > docs describe. What follows is the summary.
 
 On Ubuntu/Debian one script does the whole install — the published binaries,
-Node, the Claude Code CLI, a service account and a systemd unit. It downloads
-rather than compiles, so it takes seconds and leaves no Rust toolchain on the
-box; `--from-source` and the fallbacks are in
+Node, the Claude Code CLI, a service account and a systemd unit. It never
+compiles anything, so it takes seconds and leaves no Rust toolchain on the box;
+`--binary`, for an architecture with no published build, is in
 [docs/server.md](docs/server.md#1-install):
 
 ```bash
@@ -136,7 +136,7 @@ the readable transcript is already served at `/reader`.
 ```bash
 sudo bash scripts/install-ubuntu.sh --host 0.0.0.0   # reachable + generated token
 sudo bash scripts/install-ubuntu.sh --user wired     # run the agent as this account
-sudo bash scripts/install-ubuntu.sh --binary ./wired-backend   # skip the build
+sudo bash scripts/install-ubuntu.sh --binary ./wired-backend   # one you built yourself
 sudo bash scripts/install-ubuntu.sh --uninstall      # remove service, files, env
 ```
 
@@ -147,8 +147,9 @@ sudo bash scripts/install-ubuntu.sh --uninstall      # remove service, files, en
 | `/etc/wired-terminal/wired.env` | settings and the auth token (`0640`) |
 | `/etc/systemd/system/wired-terminal.service` | keeps the API up across reboots |
 
-Re-running the script upgrades in place. Then log the CLI in once — on a server
-that part is still a shell command, because there is no window to run it in:
+`sudo wired update` upgrades in place: it downloads the published binaries and
+restarts. Then log the CLI in once — on a server that part is still a shell
+command, because there is no window to run it in:
 
 ```bash
 sudo -u wired -H claude          # or put ANTHROPIC_API_KEY in wired.env
@@ -167,9 +168,9 @@ ssh -N -L 8000:127.0.0.1:8000 you@server     # or: wired --remote <name> status
 a firewall in front of it.
 
 **Or don't open anything.** Configure the Telegram bridge and the server dials
-out instead: `POST /api/gateway/configure` with `{"bot_token": "…", "enabled":
-true}`, message the bot, then approve the code it returns with
-`POST /api/gateway/pairings/approve`. No port, no tunnel, no TLS to terminate.
+out instead — `wired telegram on` prompts for the bot token without echoing it,
+then message the bot and `wired pair approve <code>` lets it in. No port, no
+tunnel, no TLS to terminate.
 
 ## Security
 

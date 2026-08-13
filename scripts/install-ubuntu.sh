@@ -2,7 +2,7 @@
 # Install Wired Terminal as a systemd service on Ubuntu/Debian.
 #
 # The backend is one static binary — no interpreter, no venv, no runtime
-# dependencies beyond libc. This fetches or builds it, and wires up systemd.
+# dependencies beyond libc. This installs a published one and wires up systemd.
 #
 #   sudo bash scripts/install-ubuntu.sh                     # loopback, no token
 #   sudo bash scripts/install-ubuntu.sh --host 0.0.0.0      # network + token
@@ -32,7 +32,6 @@ TOKEN=""
 AUTO_APPROVE="1"
 SVC_USER=""
 BINARY=""
-FROM_SOURCE=0
 # Published binaries, so a server install does not need a Rust toolchain. The
 # alias always points at the newest release and is set to revalidate, which is
 # why this is a fixed URL and not a manifest lookup: no jq, no parsing, and one
@@ -60,8 +59,7 @@ Options:
   --user NAME        run the agent as this user (default: the invoking user)
   --token VALUE      auth token (default: generated when --host is not loopback)
   --provider NAME    claude | grok | codex | gemini (default: first CLI found)
-  --binary PATH      install this prebuilt binary instead of downloading
-  --from-source      compile from this checkout instead of downloading
+  --binary PATH      install this binary instead of the published one
   --server-url URL   tarball of wired-backend + wired to install
   --dir PATH         install directory (default /opt/wired-terminal)
   --no-auto-approve  make the agent pause for approval instead of acting freely
@@ -80,7 +78,6 @@ while [ $# -gt 0 ]; do
     --token) TOKEN="$2"; shift 2 ;;
     --provider) PROVIDER="$2"; shift 2 ;;
     --binary) BINARY="$2"; shift 2 ;;
-    --from-source) FROM_SOURCE=1; shift ;;
     --server-url) SERVER_URL="$2"; shift 2 ;;
     --dir) INSTALL_DIR="$2"; shift 2 ;;
     --no-auto-approve) AUTO_APPROVE="0"; shift ;;
@@ -187,13 +184,15 @@ if [ "$SKIP_CLI" -eq 0 ] && ! command -v claude >/dev/null; then
 fi
 
 # ── The binary ──────────────────────────────────────────────────────────
-SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-HAVE_SRC=0
-[ -f "$SRC_DIR/crates/wired-backend/Cargo.toml" ] && HAVE_SRC=1
-
-# Intel and ARM are both published — most cheap VPSes are ARM, and until 1.0.5
-# they were the ones stuck compiling. Anything else still compiles, and must
-# never be handed an amd64 tarball just because one exists.
+# This installer does not build anything. It installs a published binary, or one
+# you hand it with --binary, and nothing else — no build-essential, no rustup, no
+# cargo, no compile on the machine being installed to. A server needs none of
+# that to *run* Wired, and installing a toolchain to produce a binary that is
+# already published was minutes of work and a permanent Rust install for nothing.
+#
+# The cost is deliberate: an architecture with no published build cannot install
+# itself here. Build it elsewhere and pass --binary. Building is a developer
+# task, and `cargo build --release` from a checkout is the whole of it.
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64) SERVER_TARGET="linux-x86_64" ;;
@@ -204,18 +203,17 @@ if [ -z "$SERVER_URL" ] && [ -n "$SERVER_TARGET" ]; then
   SERVER_URL="$RELEASES_BASE/downloads/$SERVER_TARGET-server.tar.gz"
 fi
 
-# Unpack the published pair into $1, or fail and let the caller compile.
+# Unpack the published pair into $1, or fail with a reason.
 #
 # The version check is the point of this, not decoration. The tarball is built
 # on Ubuntu 22.04, so glibc 2.35 is its floor; on anything older the dynamic
 # loader kills it with "GLIBC_2.35 not found" at first start — which, without
-# this, would be after systemd had already been pointed at it. Better to notice
-# here and spend the minutes compiling.
+# this, would be after systemd had already been pointed at it.
 try_download_server() {
   local dest="$1" tmp rc=1
   tmp="$(mktemp -d)"
   if ! curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/server.tar.gz" "$SERVER_URL"; then
-    info "nothing published at $SERVER_URL"
+    warn "nothing published at $SERVER_URL"
   elif ! tar -xzf "$tmp/server.tar.gz" -C "$tmp" 2>/dev/null; then
     warn "the downloaded archive did not unpack"
   elif [ ! -x "$tmp/wired-backend" ] || [ ! -x "$tmp/wired" ]; then
@@ -231,23 +229,6 @@ try_download_server() {
   return "$rc"
 }
 
-build_server_from_source() {
-  # Compiling needs a toolchain and a linker; the result needs neither.
-  apt-get install -y -qq build-essential pkg-config >/dev/null
-  if ! command -v cargo >/dev/null; then
-    log "installing the Rust toolchain (build-time only)"
-    curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path >/dev/null
-    export PATH="$HOME/.cargo/bin:$PATH"
-  fi
-  command -v cargo >/dev/null || die "cargo not found after install"
-  log "building wired-backend and the wired CLI (this takes a few minutes)"
-  cargo build --release --manifest-path "$SRC_DIR/crates/wired-backend/Cargo.toml"
-  install -m 0755 "$SRC_DIR/crates/wired-backend/target/release/wired-backend" \
-    "$INSTALL_DIR/bin/wired-backend"
-  install -m 0755 "$SRC_DIR/crates/wired-backend/target/release/wired" \
-    "$INSTALL_DIR/bin/wired"
-}
-
 if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
   log "stopping the running service first"
   systemctl stop "$SERVICE_NAME"
@@ -255,38 +236,18 @@ fi
 
 install -d -m 0755 "$INSTALL_DIR/bin"
 
-# Download first, compile as the fallback. A checkout is no longer a reason to
-# spend minutes on a build whose output is published and identical.
-INSTALLED_FROM=""
-
 if [ -n "$BINARY" ]; then
   [ -x "$BINARY" ] || die "--binary $BINARY is not executable"
-  log "installing prebuilt binary"
+  log "installing the binary you passed"
   install -m 0755 "$BINARY" "$INSTALL_DIR/bin/wired-backend"
   # The CLI is built from the same crate and ships beside the server.
   if [ -x "$(dirname "$BINARY")/wired" ]; then
     install -m 0755 "$(dirname "$BINARY")/wired" "$INSTALL_DIR/bin/wired"
   fi
-  INSTALLED_FROM="--binary"
-fi
-
-if [ -z "$INSTALLED_FROM" ] && [ "$FROM_SOURCE" -eq 0 ] && [ -n "$SERVER_URL" ]; then
+else
+  [ -n "$SERVER_URL" ] || die "no binaries are published for $ARCH — build one elsewhere and pass --binary <path>"
   log "fetching the published binaries"
-  if try_download_server "$INSTALL_DIR/bin"; then
-    INSTALLED_FROM="download"
-  elif [ "$HAVE_SRC" -eq 1 ]; then
-    info "compiling from this checkout instead"
-  fi
-fi
-
-if [ -z "$INSTALLED_FROM" ] && [ "$HAVE_SRC" -eq 1 ]; then
-  build_server_from_source
-  INSTALLED_FROM="source"
-fi
-
-if [ -z "$INSTALLED_FROM" ]; then
-  [ -n "$SERVER_TARGET" ] || info "no binaries are published for $ARCH"
-  die "nothing to install: no usable download, no checkout here, and no --binary"
+  try_download_server "$INSTALL_DIR/bin" || die "could not install a published binary (see above) — pass --binary <path> to install one you built"
 fi
 info "$(du -h "$INSTALL_DIR/bin/wired-backend" | cut -f1) → $INSTALL_DIR/bin/wired-backend"
 

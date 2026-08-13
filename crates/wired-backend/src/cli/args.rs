@@ -30,6 +30,7 @@ THE SERVICE
 
 SETUP
   doctor [--log]         diagnostics: CLI, sign-in, folder, chat, ports
+  telegram [<token>|off] set the bot token and connect, or switch it off
   pair [approve|deny <code>] [unpair <chat>] [reset]
                          Telegram pairing requests
   schedule [run|delete <id>]
@@ -67,21 +68,53 @@ pub struct Global {
 #[derive(Debug, Clone)]
 pub enum Command {
     Status,
-    Start { provider: Option<String> },
-    Stop { agent_only: bool },
+    Start {
+        provider: Option<String>,
+    },
+    Stop {
+        agent_only: bool,
+    },
     Restart,
-    Logs { follow: bool, lines: usize },
+    Logs {
+        follow: bool,
+        lines: usize,
+    },
     Serve,
-    Ask { text: String, wait: f64 },
+    Ask {
+        text: String,
+        wait: f64,
+    },
     Watch,
-    Approve { allow: bool },
-    Doctor { log: bool },
-    Update { check_only: bool, yes: bool },
+    Approve {
+        allow: bool,
+    },
+    Doctor {
+        log: bool,
+    },
+    Update {
+        check_only: bool,
+        yes: bool,
+    },
     Pair(Pair),
+    /// Switch the Telegram bridge on with a bot token, or off again. `None` is
+    /// "ask me for the token", so onboarding on a server is one command and no
+    /// hand-written JSON.
+    Telegram(Telegram),
     Schedule(ScheduleCmd),
     Remote(RemoteCmd),
     Help(Option<String>),
     Version,
+}
+
+#[derive(Debug, Clone)]
+pub enum Telegram {
+    /// Report what the bridge is doing; prompt for a token if there is none.
+    Show,
+    /// Set the bot token and connect. `None` means read it from the terminal
+    /// without echoing, so a token never lands in shell history.
+    On(Option<String>),
+    /// Stop the bridge but keep the token — `pair reset` is what forgets it.
+    Off,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +262,7 @@ pub fn parse(argv: Vec<String>) -> ParseResult<Cli> {
         "doctor" | "check" => parse_doctor(rest)?,
         "update" | "upgrade" => parse_update(rest)?,
         "pair" => parse_pair(rest)?,
+        "telegram" | "chat" => parse_telegram(rest)?,
         "schedule" | "schedules" => parse_schedule(rest)?,
         "remote" | "remotes" => parse_remote(rest)?,
         other => return Err(format!("unknown command: {other} (try `wired --help`)")),
@@ -363,6 +397,41 @@ fn parse_update(rest: Vec<String>) -> ParseResult<Command> {
         }
     }
     Ok(Command::Update { check_only, yes })
+}
+
+fn parse_telegram(rest: Vec<String>) -> ParseResult<Command> {
+    let mut it = rest.into_iter();
+    let Some(head) = it.next() else {
+        return Ok(Command::Telegram(Telegram::Show));
+    };
+    let rest: Vec<String> = it.collect();
+    let sub = match head.as_str() {
+        "off" | "disable" => {
+            reject_extra("telegram off", &rest)?;
+            Telegram::Off
+        }
+        // `on` with nothing after it prompts, which is the safe way to paste a
+        // token: it stays out of the shell history and off the process list.
+        "on" | "enable" => {
+            let mut rest = rest.into_iter();
+            let token = rest.next();
+            let leftover: Vec<String> = rest.collect();
+            reject_extra("telegram on", &leftover)?;
+            Telegram::On(token)
+        }
+        // A bare token is the shape people will reach for, and BotFather's
+        // tokens are unmistakable, so accept it rather than being pedantic.
+        token if token.contains(':') => {
+            reject_extra("telegram", &rest)?;
+            Telegram::On(Some(token.to_string()))
+        }
+        other => {
+            return Err(format!(
+                "telegram: expected a bot token, `on`, or `off` (got {other})"
+            ))
+        }
+    };
+    Ok(Command::Telegram(sub))
 }
 
 fn parse_pair(rest: Vec<String>) -> ParseResult<Command> {
@@ -529,6 +598,7 @@ pub fn help_for(topic: &str) -> String {
         "approve" => "wired approve [--deny]\n\n  Answers the approval dialog the agent is blocked on. Reads the menu\n  before answering, so it picks the option that means yes rather than\n  assuming a position.",
         "update" => "wired update [--check] [--yes]\n\n  Asks the published manifest whether a newer version is out, then\n  reinstalls from source and restarts the service.\n\n  --check  only say what is out; change nothing\n  --yes    do not ask before reinstalling\n\n  Exit codes with --check: 0 up to date, 2 an update is available. That is\n  what makes it usable from cron.\n\n  A desktop install updates by downloading the new app, so there this prints\n  the link rather than pretending it can replace a running .app.",
         "doctor" => "wired doctor [--log]\n\n  The setup checks: agent CLI installed, signed in, working folder\n  writable, ports, chat bridge. Exits non-zero if a check failed.\n\n  --log    also print recent log lines",
+        "telegram" | "chat" => "wired telegram                 what the bridge is doing\nwired telegram <token>         set the bot token and connect\nwired telegram on              prompt for the token, without echoing it\nwired telegram off             stop the bridge, keep the token\n\n  Make a bot first: message @BotFather in Telegram, /newbot, answer the two\n  prompts. It replies with a token like 8123456789:AAH...\n\n  `wired telegram on` with no token prompts for one and does not echo it, so\n  it stays out of your shell history and off the process list. That is the\n  one to use over ssh.\n\n  Then message the bot from your phone and `wired pair` to let it in.\n  `off` keeps the token so `wired telegram on` reconnects; `pair reset`\n  forgets it entirely.",
         "pair" => "wired pair                    pending requests and paired chats\nwired pair approve <code>     allow a chat to drive the agent\nwired pair deny <code>\nwired pair unpair <chat-id>   revoke one that was allowed\nwired pair reset [--yes]      forget the bot token and unpair everything\n\n  `unpair` leaves the bot running, so that phone can pair again with a fresh\n  code. `reset` throws the token away too — use it when rotating to a new bot,\n  and revoke the old token in BotFather afterwards.",
         "schedule" => "wired schedule                list scheduled tasks and when they next run\nwired schedule run <id>       run one now\nwired schedule delete <id>",
         "remote" => "wired remote add <name> <[user@]host> [--port 8000] [--ssh-port 22]\n                                     [--token X] [--unit wired-terminal]\nwired remote list\nwired remote remove <name>\nwired remote default <name>   used when --remote is not given\n\n  A remote is reached by opening an SSH tunnel to its loopback API for the\n  duration of the command, so the server does not need an open port.\n  Service commands (start/stop/restart/logs) run over ssh instead.\n\n  \
