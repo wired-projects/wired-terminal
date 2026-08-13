@@ -175,6 +175,9 @@ jobs:
           projectPath: app
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: 'Wired ${{ github.event.inputs.tag || github.ref_name }}'
+          # Whatever this says, say it for a first-time reader: for most of them
+          # this page is the product. The security dialog in particular is not a
+          # footnote — it is the first thing that happens after they download.
           releaseBody: |
             Download the file for your computer, open it, and follow the app.
 
@@ -182,7 +185,21 @@ jobs:
             - **Windows**: the `.exe`
             - **Linux**: the `.AppImage` or `.deb`
 
-            Running a server instead? `scripts/install-ubuntu.sh` is unchanged.
+            **Your computer will warn you about it.** Wired is not signed with a
+            paid certificate, deliberately. macOS says *"Apple could not verify…"* —
+            System Settings → Privacy & Security → **Open Anyway**. Windows says
+            *"Windows protected your PC"* — **More info**, then **Run anyway**.
+
+            Running a server instead? One line, and it installs a published binary
+            rather than compiling anything:
+
+            ```
+            curl -fsSL https://terminal.wired.dev/install.sh | sudo bash
+            wired setup
+            ```
+
+            Updating later: the app has **Install and restart** in its banner, and a
+            server takes `sudo wired update`.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
