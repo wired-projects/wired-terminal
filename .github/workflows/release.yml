@@ -250,9 +250,20 @@ jobs:
             --bin wired-backend --bin wired
           out=crates/wired-backend/target/aarch64-unknown-linux-gnu/release
           file "$out/wired" "$out/wired-backend"
-          # 22.04's cross toolchain targets glibc 2.35, so anything newer runs
-          # it. The installer re-checks on the target box before trusting it.
-          qemu-aarch64-static "$out/wired" --version
+          # These are dynamically linked, so running one needs the ARM loader
+          # and glibc as well as qemu. They live in the cross toolchain's
+          # sysroot; without -L, qemu looks for /lib/ld-linux-aarch64.so.1 on an
+          # x86 host, finds nothing, and exits 255 having proved only that the
+          # host is not ARM. 22.04's toolchain targets glibc 2.35, so anything
+          # newer runs it, and the installer re-checks on the target box anyway.
+          sysroot=/usr/aarch64-linux-gnu
+          if [ -e "$sysroot/lib/ld-linux-aarch64.so.1" ]; then
+            qemu-aarch64-static -L "$sysroot" "$out/wired" --version
+          else
+            # A runner image that moves the sysroot must not block a release —
+            # the binaries are already built and `file` confirmed the target.
+            echo "::warning::no aarch64 sysroot at $sysroot; skipped the execution check"
+          fi
 
           staging="$(mktemp -d)"
           install -m 0755 "$out/wired-backend" "$out/wired" "$staging/"
