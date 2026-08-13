@@ -5,7 +5,7 @@ bundles on a `v*` tag, attaches them to a draft GitHub release, and publishes
 the same artefacts to R2.
 
 ```
-git tag v1.0.2 && git push origin v1.0.2
+git tag v1.0.3 && git push origin v1.0.3
 ```
 
 ## Where the downloads live
@@ -44,10 +44,11 @@ missing, rather than letting the toolchain quietly come back.
 
 The manifest carries three maps and they are not the same thing:
 
-- **`platforms`** is Tauri's updater contract — a signed URL per platform. It
-  is empty until updater signing is wired up (below), and an empty one is a
-  warning rather than a failure, because refusing to publish would mean no
-  downloads at all.
+- **`platforms`** is Tauri's updater contract — a minisign-signed URL per
+  platform, which is what the app's **Install and restart** verifies before it
+  replaces itself. Empty is still a warning rather than a failure, because
+  refusing to publish would mean no downloads at all; it means the signing broke
+  and the app has nothing it will accept.
 - **`downloads`** is ours: target → URL, so the site links installers instead
   of reconstructing filenames. Renaming an artefact here cannot silently 404
   there.
