@@ -44,6 +44,11 @@ fn tool_exists(name: &str) -> bool {
 
 /// Keychain access can prompt, and a prompt in a headless process hangs
 /// forever. Tests and servers opt out with one variable.
+///
+/// Unix only, like the two `backend()` variants that call it: the Windows one
+/// reads nothing back out, so compiling this there is dead code that
+/// `clippy -D warnings` rejects.
+#[cfg(unix)]
 fn keychain_enabled() -> bool {
     crate::config::flag("WIRED_USE_KEYCHAIN", true)
 }

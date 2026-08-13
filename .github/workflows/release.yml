@@ -100,21 +100,23 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Unset in a fork: the build still runs, and the artefacts are
-          # unsigned. macOS will call an unsigned build "damaged".
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          # Minisign key for the Tauri updater — NOT Apple/Windows code
-          # signing. Absent, the build still produces installers; it just
-          # produces no .sig files, and the publish job says so.
+          # Signing is opt-in, and the mechanism matters more than it looks.
+          # Tauri asks whether APPLE_CERTIFICATE is *set*, not whether it has
+          # a value, and `${{ secrets.MISSING }}` sets it to an empty string.
+          # Passing these unconditionally is what made an unsigned build fail
+          # with "security import: failed to import keychain certificate"
+          # instead of skipping signing, so they are not passed at all.
+          #
+          # To sign: add the six APPLE_* secrets (and the two WINDOWS_* ones)
+          # from docs/releasing.md, then add them back here as
+          #   APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # An env key whose value is empty is worse than a missing key.
+          #
+          # Minisign key for the Tauri updater, which is a different thing
+          # from Apple/Windows code signing. This one is set, so it is passed.
+          # Its PASSWORD counterpart is not set and is left out for the same
+          # reason as the certificates above.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
