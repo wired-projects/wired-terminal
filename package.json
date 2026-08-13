@@ -1,6 +1,6 @@
 {
   "name": "wired-terminal",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Control Claude Code, Grok, Codex and Gemini as a 24/7 personal assistant, over HTTP and a live terminal UI",
   "license": "MIT",
