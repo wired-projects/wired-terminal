@@ -493,13 +493,46 @@ fn refresh_checkout(ui: &Ui, src: &std::path::Path, want: Option<&str>) -> Resul
 
 /// Run git in `src`, with its stderr as the error — git already explains itself
 /// better than a wrapper would.
+///
+/// Escalates the same way the installer call does. On a normal server install
+/// the checkout is root-owned, so inspecting it as the invoking user trips git's
+/// dubious-ownership guard — a root-owned repository read by a plain user is
+/// precisely what that guard exists to complain about. Running the installer
+/// through `sudo` while reading the checkout without it was inconsistent, and
+/// the inconsistency was the bug: `wired update` failed on exactly the layout
+/// `install-ubuntu.sh` creates.
 fn git(src: &std::path::Path, args: &[&str]) -> Result<String> {
-    let out = std::process::Command::new("git")
+    // Only when the checkout is somebody else's, which is the same condition
+    // git checks. Escalating unconditionally would mean shelling out to `sudo`
+    // for a repository we already own — a password prompt in the middle of a
+    // read, and tests that need root to inspect their own temp directory.
+    #[cfg(unix)]
+    let escalate = {
+        use std::os::unix::fs::MetadataExt as _;
+        let me = unsafe { libc::geteuid() };
+        me != 0
+            && std::fs::metadata(src)
+                .map(|m| m.uid() != me)
+                .unwrap_or(false)
+    };
+    #[cfg(not(unix))]
+    let escalate = false;
+
+    let mut cmd = if escalate {
+        let mut cmd = std::process::Command::new("sudo");
+        cmd.arg("git");
+        cmd
+    } else {
+        std::process::Command::new("git")
+    };
+    let program = if escalate { "sudo git" } else { "git" };
+
+    let out = cmd
         .arg("-C")
         .arg(src)
         .args(args)
         .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
+        .map_err(|e| format!("could not run {program}: {e}"))?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(format!(
