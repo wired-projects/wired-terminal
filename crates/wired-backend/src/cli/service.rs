@@ -7,7 +7,11 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+// Only the unix stop path polls for the process to go away; on Windows this
+// would be an unused import, which `clippy -D warnings` rejects.
+#[cfg(unix)]
+use std::time::Instant;
 
 use super::client::Result;
 use super::profile::Target;
