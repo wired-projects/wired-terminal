@@ -39,6 +39,8 @@ SETUP
                          scheduled tasks
   remote <add|list|remove|default>
                          saved servers for --remote
+  uninstall [--keep-data]
+                         remove the service, the files and the data
 
 OPTIONS
   -r, --remote <name>    run against a saved server, over an SSH tunnel
@@ -110,6 +112,12 @@ pub enum Command {
     Telegram(Telegram),
     /// Show or change the directory the agent works in. `None` shows it.
     Folder(Option<String>),
+    /// Take the whole install off this machine. `keep_data` leaves the
+    /// transcripts and settings; `yes` skips a confirmation a script cannot give.
+    Uninstall {
+        keep_data: bool,
+        yes: bool,
+    },
     Schedule(ScheduleCmd),
     Remote(RemoteCmd),
     Help(Option<String>),
@@ -274,6 +282,18 @@ pub fn parse(argv: Vec<String>) -> ParseResult<Cli> {
         "update" | "upgrade" => parse_update(rest)?,
         "pair" => parse_pair(rest)?,
         "telegram" | "chat" => parse_telegram(rest)?,
+        "uninstall" | "remove" => {
+            let mut keep_data = false;
+            let mut yes = false;
+            for arg in rest {
+                match arg.as_str() {
+                    "--keep-data" => keep_data = true,
+                    "--yes" | "-y" => yes = true,
+                    other => return Err(format!("uninstall: unexpected argument {other}")),
+                }
+            }
+            Command::Uninstall { keep_data, yes }
+        }
         "folder" | "cwd" => {
             let mut it = rest.into_iter();
             let path = it.next();
@@ -630,6 +650,7 @@ pub fn help_for(topic: &str) -> String {
         "update" => "wired update [--check] [--yes]\n\n  Asks the published manifest whether a newer version is out, then\n  reinstalls from source and restarts the service.\n\n  --check  only say what is out; change nothing\n  --yes    do not ask before reinstalling\n\n  Exit codes with --check: 0 up to date, 2 an update is available. That is\n  what makes it usable from cron.\n\n  A desktop install updates by downloading the new app, so there this prints\n  the link rather than pretending it can replace a running .app.",
         "setup" | "onboard" => "wired setup [--yes] [--no-telegram]\n\n  The guided first run, in the order the pieces depend on each other: the\n  agent CLI is installed and answers, a session is running, Telegram is\n  connected and your phone is paired, and anything the agent is already\n  waiting on is dealt with.\n\n  It only ever asks before doing something. --yes takes the safe steps\n  without asking and skips the ones that need a human, naming what it\n  skipped, which is what makes it usable from a provisioning script.\n\n  --no-telegram leaves the chat bridge alone.\n\n  `wired doctor` is the same checks with no questions and an exit code.",
         "doctor" => "wired doctor [--log]\n\n  The setup checks: agent CLI installed, signed in, working folder\n  writable, ports, chat bridge. Exits non-zero if a check failed.\n\n  --log    also print recent log lines",
+        "uninstall" | "remove" => "wired uninstall [--keep-data] [--yes]\n\n  Takes this install off the machine: stops the service, removes the\n  systemd unit, the binaries, /etc/wired-terminal, the `wired` symlink,\n  and the transcripts and settings.\n\n  --keep-data  leave the transcripts, settings and paired chats alone.\n               The install goes; what it recorded stays.\n  --yes        do not ask. There is no undo, so it asks by default.\n\n  It prints every path first and removes nothing until you agree, and it\n  refuses to delete a directory it does not own — a --dir install shares\n  nothing with /usr or /opt itself.\n\n  Left alone: the service account, Node, and the agent CLI with its\n  sign-in. Those predate Wired and are not its to remove.",
         "folder" | "cwd" => "wired folder                   where the agent works, and what decided that\nwired folder /srv/wired        move it there\n\n  The agent acts inside this directory, and with ask-before-acting off it\n  acts without checking — so this is a scope decision, not a preference.\n  A service user's bare home is the wrong answer when that home holds\n  .ssh or another service's .env.\n\n  WIRED_AGENT_CWD outranks the stored setting, so on a server install this\n  writes /etc/wired-terminal/wired.env rather than a setting the\n  environment would ignore. It says which one it did.\n\n  A running session keeps the directory it started in, so this restarts\n  the service unless you say no.",
         "telegram" | "chat" => "wired telegram                 what the bridge is doing\nwired telegram <token>         set the bot token and connect\nwired telegram on              prompt for the token, without echoing it\nwired telegram off             stop the bridge, keep the token\n\n  Make a bot first: message @BotFather in Telegram, /newbot, answer the two\n  prompts. It replies with a token like 8123456789:AAH...\n\n  `wired telegram on` with no token prompts for one and does not echo it, so\n  it stays out of your shell history and off the process list. That is the\n  one to use over ssh.\n\n  Then message the bot from your phone and `wired pair` to let it in.\n  `off` keeps the token so `wired telegram on` reconnects; `pair reset`\n  forgets it entirely.",
         "pair" => "wired pair                    pending requests and paired chats\nwired pair approve <code>     allow a chat to drive the agent\nwired pair deny <code>\nwired pair unpair <chat-id>   revoke one that was allowed\nwired pair reset [--yes]      forget the bot token and unpair everything\n\n  `unpair` leaves the bot running, so that phone can pair again with a fresh\n  code. `reset` throws the token away too — use it when rotating to a new bot,\n  and revoke the old token in BotFather afterwards.",

@@ -122,9 +122,16 @@ you may have read elsewhere was for, and it no longer applies.
 | `/etc/wired-terminal/wired.env` | settings + auth token, `0640`, root-owned, service group |
 | `/etc/systemd/system/wired-terminal.service` | keeps it up across reboots |
 
-Uninstall — service, unit, symlink, `/opt` dir, `/etc` dir — with
-`sudo bash scripts/install-ubuntu.sh --uninstall`. It leaves the service
-account, Node and the agent CLI alone.
+Uninstall with `sudo wired uninstall`: it stops and disables the service,
+deletes the unit, the binaries, `/etc/wired-terminal`, the `wired` symlink, and
+the transcripts and settings. `--keep-data` leaves what it recorded. It prints
+every path first and removes nothing until you agree, and it refuses to
+`remove_dir_all` a shared directory — the same list the installer guards `--dir`
+with, for the same reason.
+
+`sudo bash scripts/install-ubuntu.sh --uninstall` does the same for the install
+itself, and is what to use if the binary is already gone. Neither touches the
+service account, Node, or the agent CLI with its sign-in: those predate Wired.
 
 ### The `wired` command
 
@@ -135,6 +142,7 @@ service group and asks for nothing:
 ```bash
 wired setup           # the guided first run — start here
 wired folder          # where the agent works, and what decided that
+wired uninstall       # take it all off this machine
 wired status          # service, agent, API and chat in one screen
 wired ask "..."       # send a task, wait for the reply, print it
 wired watch           # live transcript, ctrl-c to detach

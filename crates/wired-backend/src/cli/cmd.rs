@@ -1393,6 +1393,194 @@ pub async fn pair(ui: &Ui, target: &Target, cmd: &Pair, json_out: bool) -> Resul
     Ok(EXIT_OK)
 }
 
+/// Take the install off this machine.
+///
+/// The installer's `--uninstall` does the same job, and this is deliberately not
+/// a wrapper around it: the script may not be on the box at all — 1.0.7 onward
+/// installs a published binary with no checkout beside it — and the binary knows
+/// its own paths, which is the only thing the script knew that mattered.
+///
+/// Everything is listed before anything is touched. There is no undo.
+pub async fn uninstall(
+    ui: &Ui,
+    target: &Target,
+    sup: &Supervisor,
+    keep_data: bool,
+    yes: bool,
+) -> Result<i32> {
+    if !matches!(target, Target::Local { .. }) {
+        return Err(
+            "uninstalling removes files and a unit on the machine running them, so run it there:\n               ssh <host> sudo wired uninstall"
+                .into(),
+        );
+    }
+
+    // Ask the API where its data lives before stopping it — afterwards there is
+    // nothing to ask. A dead API is not a reason to refuse: the paths below are
+    // the ones worth removing either way.
+    let (config_dir, data_dir) = match Api::connect(target).await {
+        Ok(api) => match api.get("/api/diagnostics").await {
+            Ok(report) => (
+                str_at(&report, &["config_dir"]).to_string(),
+                str_at(&report, &["data_dir"]).to_string(),
+            ),
+            Err(_) => (String::new(), String::new()),
+        },
+        Err(_) => (String::new(), String::new()),
+    };
+
+    let exe = std::env::current_exe().map_err(|e| format!("could not find my own path: {e}"))?;
+    // <install>/bin/wired → <install>
+    let install_dir = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf());
+
+    let mut targets: Vec<(&str, std::path::PathBuf)> = Vec::new();
+    if let Some(dir) = &install_dir {
+        refuse_shared_path(dir)?;
+        targets.push(("binaries", dir.clone()));
+    }
+    let env_dir = std::path::PathBuf::from("/etc/wired-terminal");
+    if env_dir.is_dir() {
+        targets.push(("settings + token", env_dir.clone()));
+    }
+    if !keep_data {
+        for (label, dir) in [("settings", &config_dir), ("transcripts", &data_dir)] {
+            if dir.is_empty() {
+                continue;
+            }
+            let path = std::path::PathBuf::from(dir);
+            if path.is_dir() && refuse_shared_path(&path).is_ok() {
+                targets.push((label, path));
+            }
+        }
+    }
+
+    let unit = match sup {
+        Supervisor::Systemd { unit } => Some(unit.clone()),
+        _ => None,
+    };
+    // Only ours: somebody else's /usr/local/bin/wired is not this command's.
+    let link = std::path::PathBuf::from("/usr/local/bin/wired");
+    let link_is_ours = std::fs::read_link(&link)
+        .map(|dest| install_dir.as_deref().is_some_and(|d| dest.starts_with(d)))
+        .unwrap_or(false);
+
+    ui.heading("This will remove");
+    if let Some(unit) = &unit {
+        ui.row(
+            "service",
+            Mark::Bad,
+            unit,
+            "stopped, disabled, unit deleted",
+        );
+    }
+    for (label, path) in &targets {
+        ui.row(label, Mark::Bad, &path.display().to_string(), "");
+    }
+    if link_is_ours {
+        ui.row("command", Mark::Bad, &link.display().to_string(), "symlink");
+    }
+    ui.heading("This will stay");
+    ui.note("The service account, Node, and the agent CLI with its sign-in.");
+    if keep_data {
+        ui.note("Your transcripts and settings, because of --keep-data.");
+    }
+
+    if !confirm(ui, yes, "Remove all of that? There is no undo.")? {
+        ui.note("Left alone.");
+        return Ok(EXIT_OK);
+    }
+
+    // Stop first: deleting the binary under a running service leaves systemd
+    // restarting something that is no longer there.
+    if let Some(unit) = &unit {
+        let _ = sup.stop();
+        for args in [vec!["disable", unit], vec!["reset-failed", unit]] {
+            let _ = std::process::Command::new("systemctl").args(args).output();
+        }
+        let unit_file = std::path::PathBuf::from(format!("/etc/systemd/system/{unit}.service"));
+        if let Err(e) = std::fs::remove_file(&unit_file) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                ui.warn(&format!("could not remove {}: {e}", unit_file.display()));
+            }
+        }
+        let _ = std::process::Command::new("systemctl")
+            .arg("daemon-reload")
+            .output();
+        println!("{} {unit}", ui.green("stopped and removed"));
+    } else if matches!(sup, Supervisor::Process) {
+        let _ = sup.stop();
+    }
+
+    if link_is_ours {
+        match std::fs::remove_file(&link) {
+            Ok(()) => println!("{} {}", ui.green("removed"), link.display()),
+            Err(e) => ui.warn(&format!("could not remove {}: {e}", link.display())),
+        }
+    }
+
+    // The install directory holds the binary running this, and goes last for
+    // that reason — Unix keeps it alive until the process exits, but anything
+    // after it would be running on borrowed time.
+    targets.sort_by_key(|(_, path)| install_dir.as_deref() == Some(path.as_path()));
+    let mut failed = false;
+    for (label, path) in &targets {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => println!("{} {} ({label})", ui.green("removed"), path.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                failed = true;
+                let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    " — sudo wired uninstall"
+                } else {
+                    ""
+                };
+                ui.warn(&format!("could not remove {}: {e}{hint}", path.display()));
+            }
+        }
+    }
+
+    if failed {
+        return Ok(EXIT_UNHEALTHY);
+    }
+    ui.note("Gone. Thanks for trying it.");
+    Ok(EXIT_OK)
+}
+
+/// Refuse to recursively delete something shared.
+///
+/// The same list the installer guards `--dir` with, for the same reason: this
+/// ends in `remove_dir_all`, and a wrong path there is unrecoverable.
+fn refuse_shared_path(path: &std::path::Path) -> Result<()> {
+    let text = path.to_string_lossy();
+    let trimmed = text.trim_end_matches('/');
+    const SHARED: [&str; 12] = [
+        "",
+        "/",
+        "/usr",
+        "/usr/bin",
+        "/usr/local",
+        "/usr/local/bin",
+        "/etc",
+        "/home",
+        "/var",
+        "/opt",
+        "/root",
+        "/srv",
+    ];
+    if SHARED.contains(&trimmed) {
+        return Err(format!(
+            "refusing to delete {text} — that is a shared directory, not an install"
+        ));
+    }
+    if !path.is_absolute() {
+        return Err(format!("refusing to delete a relative path: {text}"));
+    }
+    Ok(())
+}
+
 pub async fn schedule(ui: &Ui, target: &Target, cmd: &ScheduleCmd, json_out: bool) -> Result<i32> {
     let api = Api::connect(target).await?;
     match cmd {
@@ -1748,6 +1936,60 @@ WIRED_AGENT_CWD=/home/ubuntu
             .filter(|n| n != "wired.env")
             .collect();
         assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    // ── refuse_shared_path ──────────────────────────────────────────────
+    // `uninstall` ends in remove_dir_all, so this guard is the difference
+    // between removing an install and removing /usr. Same list the installer
+    // guards --dir with.
+
+    #[test]
+    fn shared_directories_are_refused() {
+        for path in [
+            "/",
+            "/usr",
+            "/usr/bin",
+            "/usr/local",
+            "/usr/local/bin",
+            "/etc",
+            "/home",
+            "/var",
+            "/opt",
+            "/root",
+            "/srv",
+        ] {
+            let err = refuse_shared_path(std::path::Path::new(path))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("shared directory"), "{path}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_slip_past() {
+        // `/opt/` and `/opt` are the same directory, and only one of them is in
+        // the list as written.
+        let err = refuse_shared_path(std::path::Path::new("/opt/")).unwrap_err();
+        assert!(err.to_string().contains("shared directory"), "{err}");
+    }
+
+    #[test]
+    fn a_relative_path_is_refused() {
+        let err = refuse_shared_path(std::path::Path::new("wired-terminal")).unwrap_err();
+        assert!(err.to_string().contains("relative"), "{err}");
+    }
+
+    #[test]
+    fn a_real_install_directory_is_allowed() {
+        for path in [
+            "/opt/wired-terminal",
+            "/srv/wired",
+            "/home/ubuntu/wired",
+            "/usr/local/wired-terminal",
+        ] {
+            refuse_shared_path(std::path::Path::new(path))
+                .unwrap_or_else(|e| panic!("{path} should be allowed: {e}"));
+        }
     }
 
     /// No `tempfile` dependency for six tests; this is the whole of what they need.

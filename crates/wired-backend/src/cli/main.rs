@@ -109,6 +109,9 @@ async fn run(ui: &Ui, cli: args::Cli) -> client::Result<i32> {
         Command::Pair(sub) => cmd::pair(ui, &target, sub, json).await,
         Command::Telegram(sub) => cmd::telegram(ui, &target, sub, json).await,
         Command::Folder(path) => cmd::folder(ui, &target, path.as_deref(), json).await,
+        Command::Uninstall { keep_data, yes } => {
+            cmd::uninstall(ui, &target, &supervisor, *keep_data, *yes).await
+        }
         Command::Schedule(sub) => cmd::schedule(ui, &target, sub, json).await,
         // Handled before the runtime was built.
         Command::Remote(_) | Command::Serve | Command::Help(_) | Command::Version => {

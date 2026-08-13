@@ -69,6 +69,7 @@ service so that neither `systemctl` nor a remembered `curl` is required:
 ```bash
 wired setup                               # the guided first run — start here
 wired folder [<path>]                     # where the agent works — show it, or move it
+wired uninstall [--keep-data]             # service, files and data, off this machine
 wired status                              # service, agent, API and chat, one screen
 wired ask "summarise my git status"       # send a task, print the reply
 wired watch                               # live transcript, ctrl-c to detach
@@ -139,7 +140,7 @@ the readable transcript is already served at `/reader`.
 sudo bash scripts/install-ubuntu.sh --host 0.0.0.0   # reachable + generated token
 sudo bash scripts/install-ubuntu.sh --user wired     # run the agent as this account
 sudo bash scripts/install-ubuntu.sh --binary ./wired-backend   # one you built yourself
-sudo bash scripts/install-ubuntu.sh --uninstall      # remove service, files, env
+sudo wired uninstall                                # remove service, files, data
 ```
 
 | Path | What |
