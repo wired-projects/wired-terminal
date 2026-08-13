@@ -68,6 +68,7 @@ service so that neither `systemctl` nor a remembered `curl` is required:
 
 ```bash
 wired setup                               # the guided first run — start here
+wired folder [<path>]                     # where the agent works — show it, or move it
 wired status                              # service, agent, API and chat, one screen
 wired ask "summarise my git status"       # send a task, print the reply
 wired watch                               # live transcript, ctrl-c to detach

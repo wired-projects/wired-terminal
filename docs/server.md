@@ -134,6 +134,7 @@ service group and asks for nothing:
 
 ```bash
 wired setup           # the guided first run — start here
+wired folder          # where the agent works, and what decided that
 wired status          # service, agent, API and chat in one screen
 wired ask "..."       # send a task, wait for the reply, print it
 wired watch           # live transcript, ctrl-c to detach
@@ -206,9 +207,23 @@ WIRED_USE_KEYCHAIN=0
 WIRED_AGENT_CWD=/home/wired/wired-work
 ```
 
-Create that directory first (`sudo -u wired mkdir -p /home/wired/wired-work`) —
-`WIRED_AGENT_CWD` is ignored if the path is not a directory, and it falls back
-to the home directory silently. Restart after editing:
+Or let the CLI do all of that:
+
+```bash
+sudo wired folder /home/wired/wired-work
+```
+
+`wired folder` on its own says where the agent works **and what decided it**,
+which matters more than it sounds: `WIRED_AGENT_CWD` outranks the stored setting,
+so on a server install `POST /api/setup/folder` and the desktop app's folder
+picker both succeed and change nothing. Given a path, `wired folder` writes
+whichever of the two actually decides — rewriting that one line in `wired.env`
+when the environment is what wins — and offers the restart, because a running
+session keeps the directory it started in.
+
+By hand: create the directory first (`sudo -u wired mkdir -p
+/home/wired/wired-work`) — `WIRED_AGENT_CWD` is ignored if the path is not a
+directory, and it falls back to the home directory silently. Then restart:
 `sudo systemctl restart wired-terminal`.
 
 > With auto-approve on — the server default — this is a speed bump, not a

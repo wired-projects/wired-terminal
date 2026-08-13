@@ -1139,6 +1139,158 @@ pub async fn telegram(ui: &Ui, target: &Target, cmd: &Telegram, json_out: bool) 
     }
 }
 
+/// Where the agent works, and how to move it.
+///
+/// The awkward part is precedence. `WIRED_AGENT_CWD` outranks the stored
+/// setting, so on a server install — where `install-ubuntu.sh` writes that
+/// variable into `wired.env` — posting a new folder to the API succeeds, changes
+/// `settings.json`, and has no effect at all. The desktop app greys the field out
+/// for exactly this reason. A CLI cannot grey anything out, so it has to write
+/// whichever of the two actually decides.
+pub async fn folder(ui: &Ui, target: &Target, path: Option<&str>, json_out: bool) -> Result<i32> {
+    let api = Api::connect(target).await?;
+    let settings = api.get("/api/settings").await?;
+    let current = str_at(&settings, &["folder"]);
+    let pinned = settings["env_overrides"]
+        .as_array()
+        .map(|o| o.iter().any(|v| v.as_str() == Some("folder")))
+        .unwrap_or(false);
+
+    let Some(want) = path else {
+        if json_out {
+            ui.json(&json!({ "folder": current, "pinned_by_env": pinned }));
+            return Ok(EXIT_OK);
+        }
+        ui.field("folder", current);
+        ui.field(
+            "decided by",
+            if pinned {
+                "WIRED_AGENT_CWD in the environment"
+            } else {
+                "the stored setting"
+            },
+        );
+        // Worth saying unprompted: with approvals off, the folder *is* the
+        // boundary, and the installer's default is the service user's own home.
+        if bool_at(&settings, &["ask_before_acting"]) {
+            ui.note("It asks before acting, so this is where it works, not what it can reach.");
+        } else {
+            ui.note("It acts without asking, so this is the boundary. A home holding");
+            ui.note(".ssh or another service's .env is the wrong side of it.");
+        }
+        return Ok(EXIT_OK);
+    };
+
+    if !want.starts_with('/') {
+        return Err("that needs to be a full path, starting with /".into());
+    }
+    if want == current {
+        ui.note(&format!("Already {current}."));
+        return Ok(EXIT_OK);
+    }
+
+    if pinned {
+        // The API would take this and the environment would ignore it.
+        let env_file = std::path::Path::new("/etc/wired-terminal/wired.env");
+        if !env_file.is_file() {
+            return Err(format!(
+                "WIRED_AGENT_CWD is set in the environment, so it outranks anything stored.\n               \
+                 Change it where it is set, then restart: the value the service sees is {current}"
+            ));
+        }
+        if !confirm(
+            ui,
+            false,
+            &format!(
+                "WIRED_AGENT_CWD decides this. Rewrite it in {} ?",
+                env_file.display()
+            ),
+        )? {
+            ui.note("Left alone.");
+            return Ok(EXIT_OK);
+        }
+        rewrite_env_cwd(env_file, want)?;
+        ui.note(&format!("{} now says {want}.", env_file.display()));
+    } else {
+        // `choose_folder` on the far side creates it, requires an absolute path
+        // and write-probes it, so a folder it accepts is one the agent can use.
+        api.post("/api/setup/folder", json!({ "folder": want }))
+            .await?;
+        ui.note(&format!("Stored: {want}"));
+    }
+
+    // A live session keeps the directory it was started in, so nothing has moved
+    // until it is restarted. Saying "done" here would be a lie.
+    let sup = Supervisor::for_target(target);
+    if sup.is_managed() {
+        if confirm(ui, false, "Restart now, so the agent picks it up?")? {
+            sup.restart()?;
+            println!("{}", ui.green("restarted"));
+        } else {
+            ui.note("The running session keeps the old folder until you restart.");
+        }
+    } else {
+        ui.note("Restart the backend for the running session to pick it up.");
+    }
+    Ok(EXIT_OK)
+}
+
+/// Replace (or add) `WIRED_AGENT_CWD` in a systemd `EnvironmentFile`.
+///
+/// Line-oriented on purpose: this file is hand-edited and carries comments and
+/// an auth token, so it is rewritten in place rather than regenerated. Written
+/// to a temp file beside it and renamed, because a half-written env file is a
+/// service that will not start.
+fn rewrite_env_cwd(env_file: &std::path::Path, want: &str) -> Result<()> {
+    let text = std::fs::read_to_string(env_file).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!(
+                "{} needs root to edit: sudo wired folder …",
+                env_file.display()
+            )
+        } else {
+            format!("could not read {}: {e}", env_file.display())
+        }
+    })?;
+
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut replaced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("WIRED_AGENT_CWD=") {
+            out.push_str(&format!("WIRED_AGENT_CWD={want}\n"));
+            replaced = true;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !replaced {
+        out.push_str(&format!("WIRED_AGENT_CWD={want}\n"));
+    }
+
+    let tmp = env_file.with_extension("env.wired-new");
+    std::fs::write(&tmp, out.as_bytes()).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!(
+                "{} needs root to edit: sudo wired folder …",
+                env_file.display()
+            )
+        } else {
+            format!("could not write beside {}: {e}", env_file.display())
+        }
+    })?;
+    // The file holds an auth token, so it must not widen on the way through.
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::metadata(env_file) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    std::fs::rename(&tmp, env_file).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("could not replace {}: {e}", env_file.display())
+    })?;
+    Ok(())
+}
+
 pub async fn pair(ui: &Ui, target: &Target, cmd: &Pair, json_out: bool) -> Result<i32> {
     let api = Api::connect(target).await?;
     match cmd {
@@ -1519,6 +1671,83 @@ mod update_tests {
         let err = run(&fx, &url, "1.0.3").unwrap_err();
         assert!(err.to_string().contains("did not unpack"), "{err}");
         assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
+    }
+
+    // ── rewrite_env_cwd ─────────────────────────────────────────────────
+    // This edits a live service's EnvironmentFile, which also holds its auth
+    // token, so the things worth pinning down are that it changes one line and
+    // nothing else, and that the mode does not widen on the way through.
+
+    const ENV_SAMPLE: &str = "\
+# Wired Terminal — read by systemd.
+WIRED_HOST=127.0.0.1
+WIRED_PORT=8000
+# WIRED_AUTH_TOKEN=secret-do-not-touch
+WIRED_AGENT_AUTO_APPROVE=1
+# Where the agent works. Its own home by default.
+WIRED_AGENT_CWD=/home/ubuntu
+";
+
+    fn env_file_with(body: &str) -> (tempdir::TempDir, PathBuf) {
+        let dir = tempdir::TempDir::new();
+        let path = dir.path().join("wired.env");
+        std::fs::write(&path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        (dir, path)
+    }
+
+    #[test]
+    fn rewriting_the_folder_touches_only_that_line() {
+        let (_d, path) = env_file_with(ENV_SAMPLE);
+        rewrite_env_cwd(&path, "/srv/wired").unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+
+        assert!(after.contains("WIRED_AGENT_CWD=/srv/wired"));
+        assert!(!after.contains("/home/ubuntu"));
+        // Everything else survives, comments and the token line included.
+        assert!(after.contains("# WIRED_AUTH_TOKEN=secret-do-not-touch"));
+        assert!(after.contains("WIRED_PORT=8000"));
+        assert!(after.contains("# Where the agent works. Its own home by default."));
+        assert_eq!(
+            after.lines().count(),
+            ENV_SAMPLE.lines().count(),
+            "line count changed: {after}"
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_variable_gains_it() {
+        let (_d, path) = env_file_with("WIRED_HOST=127.0.0.1\nWIRED_PORT=8000\n");
+        rewrite_env_cwd(&path, "/srv/wired").unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("WIRED_HOST=127.0.0.1"));
+        assert!(after.trim_end().ends_with("WIRED_AGENT_CWD=/srv/wired"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_mode_does_not_widen() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_d, path) = env_file_with(ENV_SAMPLE);
+        rewrite_env_cwd(&path, "/srv/wired").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "mode became {mode:o}");
+    }
+
+    #[test]
+    fn no_temp_file_is_left_behind() {
+        let (dir, path) = env_file_with(ENV_SAMPLE);
+        rewrite_env_cwd(&path, "/srv/wired").unwrap();
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n != "wired.env")
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
     }
 
     /// No `tempfile` dependency for six tests; this is the whole of what they need.

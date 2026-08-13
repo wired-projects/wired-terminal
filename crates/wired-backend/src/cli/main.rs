@@ -108,6 +108,7 @@ async fn run(ui: &Ui, cli: args::Cli) -> client::Result<i32> {
         Command::Update { check_only, yes } => cmd::update(ui, &target, *check_only, *yes).await,
         Command::Pair(sub) => cmd::pair(ui, &target, sub, json).await,
         Command::Telegram(sub) => cmd::telegram(ui, &target, sub, json).await,
+        Command::Folder(path) => cmd::folder(ui, &target, path.as_deref(), json).await,
         Command::Schedule(sub) => cmd::schedule(ui, &target, sub, json).await,
         // Handled before the runtime was built.
         Command::Remote(_) | Command::Serve | Command::Help(_) | Command::Version => {
