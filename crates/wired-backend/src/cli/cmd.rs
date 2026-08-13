@@ -1190,14 +1190,20 @@ pub async fn folder(ui: &Ui, target: &Target, path: Option<&str>, json_out: bool
     }
 
     if pinned {
-        // The API would take this and the environment would ignore it.
-        let env_file = std::path::Path::new("/etc/wired-terminal/wired.env");
-        if !env_file.is_file() {
+        // The API would take this and the environment would ignore it. Which
+        // file carries the variable depends on the install: a root install has
+        // systemd reading /etc, a rootless one has the user unit reading $HOME.
+        let candidates = [
+            std::path::PathBuf::from("/etc/wired-terminal/wired.env"),
+            home_dir().join(".config/wired-terminal/wired.env"),
+        ];
+        let found = candidates.iter().find(|p| p.is_file());
+        let Some(env_file) = found else {
             return Err(format!(
-                "WIRED_AGENT_CWD is set in the environment, so it outranks anything stored.\n               \
-                 Change it where it is set, then restart: the value the service sees is {current}"
+                "WIRED_AGENT_CWD is set in the environment, so it outranks anything stored,\n               \
+                 and no wired.env was found to change it in. The value the service sees is {current}"
             ));
-        }
+        };
         if !confirm(
             ui,
             false,
@@ -1458,21 +1464,29 @@ pub async fn uninstall(
     }
 
     let unit = match sup {
-        Supervisor::Systemd { unit } => Some(unit.clone()),
+        Supervisor::Systemd { unit, user } => Some((unit.clone(), *user)),
         _ => None,
     };
-    // Only ours: somebody else's /usr/local/bin/wired is not this command's.
-    let link = std::path::PathBuf::from("/usr/local/bin/wired");
+    // Only ours: somebody else's `wired` on the PATH is not this command's.
+    let link = if matches!(&unit, Some((_, true))) {
+        home_dir().join(".local/bin/wired")
+    } else {
+        std::path::PathBuf::from("/usr/local/bin/wired")
+    };
     let link_is_ours = std::fs::read_link(&link)
         .map(|dest| install_dir.as_deref().is_some_and(|d| dest.starts_with(d)))
         .unwrap_or(false);
 
     ui.heading("This will remove");
-    if let Some(unit) = &unit {
+    if let Some((unit, user)) = &unit {
         ui.row(
             "service",
             Mark::Bad,
-            unit,
+            &if *user {
+                format!("{unit} (--user)")
+            } else {
+                unit.clone()
+            },
             "stopped, disabled, unit deleted",
         );
     }
@@ -1495,20 +1509,33 @@ pub async fn uninstall(
 
     // Stop first: deleting the binary under a running service leaves systemd
     // restarting something that is no longer there.
-    if let Some(unit) = &unit {
+    if let Some((unit, user)) = &unit {
         let _ = sup.stop();
-        for args in [vec!["disable", unit], vec!["reset-failed", unit]] {
-            let _ = std::process::Command::new("systemctl").args(args).output();
+        // `--user` has to be threaded here too. Without it these would talk to
+        // root's session manager, which has never heard of the unit — and would
+        // report success having done nothing.
+        for verb in ["disable", "reset-failed"] {
+            let mut cmd = std::process::Command::new("systemctl");
+            if *user {
+                cmd.arg("--user");
+            }
+            let _ = cmd.arg(verb).arg(unit).output();
         }
-        let unit_file = std::path::PathBuf::from(format!("/etc/systemd/system/{unit}.service"));
+        let unit_file = if *user {
+            home_dir().join(format!(".config/systemd/user/{unit}.service"))
+        } else {
+            std::path::PathBuf::from(format!("/etc/systemd/system/{unit}.service"))
+        };
         if let Err(e) = std::fs::remove_file(&unit_file) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 ui.warn(&format!("could not remove {}: {e}", unit_file.display()));
             }
         }
-        let _ = std::process::Command::new("systemctl")
-            .arg("daemon-reload")
-            .output();
+        let mut reload = std::process::Command::new("systemctl");
+        if *user {
+            reload.arg("--user");
+        }
+        let _ = reload.arg("daemon-reload").output();
         println!("{} {unit}", ui.green("stopped and removed"));
     } else if matches!(sup, Supervisor::Process) {
         let _ = sup.stop();
@@ -1547,6 +1574,13 @@ pub async fn uninstall(
     }
     ui.note("Gone. Thanks for trying it.");
     Ok(EXIT_OK)
+}
+
+/// `$HOME`, or the current directory if the environment has no idea.
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 /// Refuse to recursively delete something shared.

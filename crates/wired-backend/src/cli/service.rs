@@ -40,6 +40,10 @@ impl State {
 pub enum Supervisor {
     Systemd {
         unit: String,
+        /// A `systemctl --user` unit under `~/.config/systemd/user`, which is
+        /// the whole of the rootless install: same guarantees, no sudo, and the
+        /// binaries live somewhere the owner can already write.
+        user: bool,
     },
     /// A backend we started ourselves, tracked by a pid file.
     Process,
@@ -62,8 +66,18 @@ impl Supervisor {
                 unit: remote.unit().to_string(),
             },
             Target::Local { unit, .. } => {
-                if systemd_manages(unit) {
-                    Supervisor::Systemd { unit: unit.clone() }
+                // System first: if both somehow exist, the root install is the
+                // one systemd starts at boot regardless of who is logged in.
+                if systemd_manages(unit, false) {
+                    Supervisor::Systemd {
+                        unit: unit.clone(),
+                        user: false,
+                    }
+                } else if systemd_manages(unit, true) {
+                    Supervisor::Systemd {
+                        unit: unit.clone(),
+                        user: true,
+                    }
                 } else {
                     Supervisor::Process
                 }
@@ -73,7 +87,7 @@ impl Supervisor {
 
     pub fn state(&self) -> State {
         match self {
-            Supervisor::Systemd { unit } => systemd_state(&systemctl_show(unit, None)),
+            Supervisor::Systemd { unit, user } => systemd_state(&systemctl_show(unit, None, *user)),
             Supervisor::Process => process_state(),
             Supervisor::Remote {
                 host,
@@ -95,7 +109,7 @@ impl Supervisor {
 
     pub fn start(&self) -> Result<()> {
         match self {
-            Supervisor::Systemd { unit } => systemctl(unit, "start"),
+            Supervisor::Systemd { unit, user } => systemctl(unit, "start", *user),
             Supervisor::Process => process_start(),
             Supervisor::Remote {
                 host,
@@ -108,7 +122,7 @@ impl Supervisor {
 
     pub fn stop(&self) -> Result<()> {
         match self {
-            Supervisor::Systemd { unit } => systemctl(unit, "stop"),
+            Supervisor::Systemd { unit, user } => systemctl(unit, "stop", *user),
             Supervisor::Process => process_stop(),
             Supervisor::Remote {
                 host,
@@ -121,7 +135,7 @@ impl Supervisor {
 
     pub fn restart(&self) -> Result<()> {
         match self {
-            Supervisor::Systemd { unit } => systemctl(unit, "restart"),
+            Supervisor::Systemd { unit, user } => systemctl(unit, "restart", *user),
             Supervisor::Process => {
                 // Ignore a failure to stop something that was not running.
                 let _ = process_stop();
@@ -143,8 +157,13 @@ impl Supervisor {
 
     pub fn logs(&self, follow: bool, lines: usize) -> Result<()> {
         match self {
-            Supervisor::Systemd { unit } => {
+            Supervisor::Systemd { unit, user } => {
                 let mut cmd = Command::new("journalctl");
+                if *user {
+                    // A user unit logs into the user journal, and `-u` alone
+                    // there finds nothing at all rather than erroring.
+                    cmd.arg("--user");
+                }
                 cmd.arg("-u").arg(unit).arg("-n").arg(lines.to_string());
                 if follow {
                     cmd.arg("-f");
@@ -178,14 +197,21 @@ impl Supervisor {
     /// The name for the first row of `wired status`.
     pub fn label(&self) -> String {
         match self {
-            Supervisor::Systemd { unit } | Supervisor::Remote { unit, .. } => unit.clone(),
+            Supervisor::Systemd { unit, .. } | Supervisor::Remote { unit, .. } => unit.clone(),
             Supervisor::Process | Supervisor::Unmanaged => "wired-backend".to_string(),
         }
     }
 
     pub fn describe(&self) -> String {
         match self {
-            Supervisor::Systemd { unit } => format!("systemd ({unit})"),
+            Supervisor::Systemd { unit, user } => {
+                // Worth saying which: it decides whether anything needs sudo.
+                if *user {
+                    format!("systemd --user ({unit})")
+                } else {
+                    format!("systemd ({unit})")
+                }
+            }
             Supervisor::Process => "this shell".to_string(),
             Supervisor::Remote { host, unit, .. } => format!("systemd on {host} ({unit})"),
             Supervisor::Unmanaged => "not managed from here".to_string(),
@@ -231,7 +257,7 @@ fn remote_state_command(unit: &str) -> String {
 }
 
 /// Is this machine running the unit under systemd at all?
-fn systemd_manages(unit: &str) -> bool {
+fn systemd_manages(unit: &str, user: bool) -> bool {
     if !cfg!(target_os = "linux") {
         return false;
     }
@@ -240,13 +266,16 @@ fn systemd_manages(unit: &str) -> bool {
     if !std::path::Path::new("/run/systemd/system").exists() {
         return false;
     }
-    systemctl_show(unit, Some("LoadState"))
+    systemctl_show(unit, Some("LoadState"), user)
         .iter()
         .any(|line| line.starts_with("LoadState=") && !line.ends_with("not-found"))
 }
 
-fn systemctl_show(unit: &str, property: Option<&str>) -> Vec<String> {
+fn systemctl_show(unit: &str, property: Option<&str>, user: bool) -> Vec<String> {
     let mut cmd = Command::new("systemctl");
+    if user {
+        cmd.arg("--user");
+    }
     cmd.arg("show").arg(unit);
     match property {
         Some(p) => {
@@ -326,12 +355,19 @@ fn boot_uptime_seconds() -> Option<f64> {
         .ok()
 }
 
-fn systemctl(unit: &str, verb: &str) -> Result<()> {
-    let mut cmd = if is_root() {
+fn systemctl(unit: &str, verb: &str, user: bool) -> Result<()> {
+    // A user unit is the owner's to start and stop, so sudo would be both
+    // unnecessary and wrong: `sudo systemctl --user` talks to *root's* session
+    // manager, which has no such unit.
+    let mut cmd = if user {
+        let mut cmd = Command::new("systemctl");
+        cmd.arg("--user");
+        cmd
+    } else if is_root() {
         Command::new("systemctl")
     } else {
-        // The unit is a system unit; without root, systemctl would only prompt
-        // through polkit, which does not exist over ssh.
+        // A system unit; without root, systemctl would only prompt through
+        // polkit, which does not exist over ssh.
         let mut cmd = Command::new("sudo");
         cmd.arg("systemctl");
         cmd
