@@ -1,6 +1,6 @@
 [package]
 name = "wired-backend"
-version = "1.0.5"
+version = "1.0.6"
 edition = "2021"
 description = "Control Claude Code and Grok CLI as a 24/7 personal assistant"
 license = "MIT"
