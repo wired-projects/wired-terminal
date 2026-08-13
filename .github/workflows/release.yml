@@ -107,6 +107,31 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: cargo test --manifest-path crates/wired-backend/Cargo.toml
 
+      # The two binaries a headless server install actually needs, which are not
+      # what tauri-action produces: it builds desktop bundles, and unpacking a
+      # .deb to fish a server binary out of it is not an install path. Without
+      # these published, scripts/install-ubuntu.sh has nothing to download, so
+      # every server install adds apt + rustup and compiles Rust on the box —
+      # minutes of work whose output the box then needs no toolchain to run.
+      - name: Build the headless server binaries
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          cargo build --release --manifest-path crates/wired-backend/Cargo.toml \
+            --bin wired-backend --bin wired
+          staging="$(mktemp -d)"
+          install -m 0755 crates/wired-backend/target/release/wired-backend "$staging/"
+          install -m 0755 crates/wired-backend/target/release/wired "$staging/"
+          # Flat archive: the installer unpacks to a temp dir and installs two
+          # known names out of it, so a leading directory would only be in the way.
+          tar -czf wired-terminal-server_linux-x86_64.tar.gz \
+            -C "$staging" wired-backend wired
+          ls -l wired-terminal-server_linux-x86_64.tar.gz
+          # Built on 22.04, so the floor is that glibc. The installer runs
+          # `wired --version` before trusting the download and compiles instead
+          # when the loader rejects it, which is the check that keeps an older
+          # distro from installing a binary that cannot start.
+          crates/wired-backend/target/release/wired --version
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -169,6 +194,7 @@ jobs:
             app/src-tauri/target/**/release/bundle/**/*.deb
             app/src-tauri/target/**/release/bundle/**/*.tar.gz
             app/src-tauri/target/**/release/bundle/**/*.sig
+            wired-terminal-server_*.tar.gz
           if-no-files-found: warn
 
   publish-r2:
@@ -267,4 +293,22 @@ jobs:
             console.log("OK version", j.version,
               "| downloads:", Object.keys(j.downloads).join(", "),
               "| signed updater platforms:", signed || "none (auto-update off)");
+            // scripts/install-ubuntu.sh curls the alias below and only compiles
+            // when it 404s. A release that quietly stopped publishing it would
+            // put a Rust toolchain back on every server install, silently.
+            if (!j.server || !j.server["linux-x86_64"]) {
+              console.error("no server binaries in latest.json — install-ubuntu.sh would fall back to compiling");
+              process.exit(1);
+            }
+            console.log("server tarball:", j.server["linux-x86_64"].alias);
           '
+          # Advisory, not a gate. The manifest check above is the real one; this
+          # HEAD can lose a race with edge propagation, and a green release that
+          # published everything must not go red on a cache that has not caught
+          # up yet. install-ubuntu.sh retries and falls back regardless.
+          if curl -fsSLI -o /dev/null \
+            "https://wired-terminal-releases.wired.dev/downloads/linux-x86_64-server.tar.gz"; then
+            echo "server alias reachable"
+          else
+            echo "::warning::the server alias did not answer a HEAD yet — likely edge propagation"
+          fi

@@ -40,10 +40,30 @@ git clone <this repo> && cd wired-terminal
 sudo bash scripts/install-ubuntu.sh
 ```
 
-The script self-elevates, so `sudo` is belt-and-braces. It installs build
-tools and the Rust toolchain, compiles the binary, writes
+The script self-elevates, so `sudo` is belt-and-braces. It downloads the
+published `wired-backend` and `wired` binaries, writes
 `/etc/wired-terminal/wired.env`, installs a systemd unit, starts it, and waits
-for `/healthz` to answer.
+for `/healthz` to answer. That takes seconds, and it leaves no Rust toolchain
+and no build tools behind.
+
+It compiles instead — installing `build-essential` and rustup first, which is
+the minutes-long path — only when it has to:
+
+| | |
+|---|---|
+| Not x86_64 | binaries are published for `linux-x86_64` only |
+| No download | the bucket is unreachable, or the release has no server tarball |
+| Won't run here | the tarball is built on Ubuntu 22.04, so glibc 2.35 is its floor |
+| You asked | `--from-source` |
+
+The third is worth knowing about: the script runs `wired --version` on what it
+downloaded before trusting it, so an older distro falls back to compiling rather
+than handing systemd a binary the dynamic loader will refuse. Compiling needs a
+checkout; with none, and no usable download, it stops and says so rather than
+installing half of something.
+
+Point it elsewhere with `--server-url URL`, or `WIRED_RELEASES_BASE` to swap the
+whole bucket for a mirror.
 
 **Which account runs the agent** is the one decision that matters, because the
 agent can do anything that account can:

@@ -112,8 +112,11 @@ unhealthy — which is what makes `wired doctor` usable from cron.
 > copy-pasteable commands, since a server has none of the buttons the other
 > docs describe. What follows is the summary.
 
-On Ubuntu/Debian one script does the whole install — the Rust toolchain, Node,
-the Claude Code CLI, a service account and a systemd unit:
+On Ubuntu/Debian one script does the whole install — the published binaries,
+Node, the Claude Code CLI, a service account and a systemd unit. It downloads
+rather than compiles, so it takes seconds and leaves no Rust toolchain on the
+box; `--from-source` and the fallbacks are in
+[docs/server.md](docs/server.md#1-install):
 
 ```bash
 curl -fsSL https://terminal.wired.dev/install.sh | sudo bash

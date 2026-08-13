@@ -107,6 +107,11 @@ const TARGETS = [
     installer: (f) => /\.AppImage$/i.test(f) || /\.deb$/i.test(f),
     updaterAsset: (f) => /\.AppImage\.tar\.gz$/i.test(f),
     updaterContentType: "application/gzip",
+    // The headless pair — `wired-backend` and `wired` — for a server install,
+    // which wants neither a desktop bundle nor a Rust toolchain. Deliberately
+    // narrower than the updater's `.AppImage.tar.gz`, so the two archives
+    // published for this target cannot be mistaken for one another.
+    serverAsset: (f) => /-server_.*\.tar\.gz$/i.test(base(f)),
   },
 ];
 
@@ -237,6 +242,8 @@ function main() {
   const platforms = {};
   /** @type {Record<string, { url: string, label: string, filename: string }>} */
   const downloads = {};
+  /** @type {Record<string, { url: string, alias: string, filename: string }>} */
+  const server = {};
 
   for (const target of TARGETS) {
     // Scope to this target's artifact directory. Two macOS dmgs differ only by
@@ -295,6 +302,42 @@ function main() {
       url: `${PUBLIC_BASE}/downloads/${filename}?v=${encodeURIComponent(version)}`,
     };
 
+    // ── The headless server binaries, for targets that ship them ────────
+    // Before the updater block on purpose: that one bails early when nothing is
+    // signed, which is every release until the updater is wired up, and a
+    // server tarball must not be collateral damage of that `continue`.
+    if (target.serverAsset) {
+      const serverAsset = files.find((f) => !isSig(f) && target.serverAsset(f));
+      if (!serverAsset) {
+        console.warn(`WARN: ${target.label}: no server tarball found in ${target.dir}`);
+      } else {
+        const serverName = `${STEM}-server_${version}_${target.id}.tar.gz`;
+        const stagedServer = join(staging, serverName);
+        copyFileSync(serverAsset, stagedServer);
+        putObject(`downloads/${serverName}`, stagedServer, {
+          contentType: "application/gzip",
+          cacheControl: "public, max-age=31536000, immutable",
+        });
+
+        // The alias is the contract with install-ubuntu.sh: a fixed URL it can
+        // `curl` with no manifest to parse and no `jq` to install first. It has
+        // to revalidate, or a CDN copy outlives the release it came from.
+        const aliasName = `${target.id}-server.tar.gz`;
+        const stagedAlias = join(staging, aliasName);
+        copyFileSync(serverAsset, stagedAlias);
+        putObject(`downloads/${aliasName}`, stagedAlias, {
+          contentType: "application/gzip",
+          cacheControl: "public, max-age=0, must-revalidate",
+        });
+
+        server[target.id] = {
+          filename: serverName,
+          url: `${PUBLIC_BASE}/downloads/${serverName}?v=${encodeURIComponent(version)}`,
+          alias: `${PUBLIC_BASE}/downloads/${aliasName}`,
+        };
+      }
+    }
+
     // ── The updater entry, when it is signed ────────────────────────────
     const asset = files.find((f) => !isSig(f) && target.updaterAsset(f));
     const sig = asset
@@ -339,8 +382,9 @@ function main() {
 
   // `platforms` is Tauri's updater contract. `downloads` is ours: it lets the
   // site link installers without reconstructing filenames, which is how a
-  // rename here turns into a 404 there.
-  const latest = { version, notes, pub_date: pubDate, platforms, downloads };
+  // rename here turns into a 404 there. `server` is the headless pair, kept
+  // apart because a .deb and a systemd install are not the same download.
+  const latest = { version, notes, pub_date: pubDate, platforms, downloads, server };
   const latestPath = join(staging, "latest.json");
   writeFileSync(latestPath, JSON.stringify(latest, null, 2) + "\n");
   console.log("\nlatest.json:\n", JSON.stringify(latest, null, 2));
@@ -355,6 +399,9 @@ function main() {
   for (const [id, d] of Object.entries(downloads)) {
     console.log(`  ${d.label}:`, `${PUBLIC_BASE}/downloads/${d.filename}`);
     console.log(`  ${" ".repeat(d.label.length)} alias:`, `${PUBLIC_BASE}/downloads/${id}.zip`);
+  }
+  for (const [id, s] of Object.entries(server)) {
+    console.log(`  server (${id}):`, s.alias);
   }
 }
 

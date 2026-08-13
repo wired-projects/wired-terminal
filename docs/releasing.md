@@ -20,6 +20,8 @@ on R2, because that is where versioned objects, stable aliases and a CDN are:
 | Manifest | `updates/latest.json` |
 | Installers | `downloads/wired-terminal_<version>_<target>.zip` |
 | Stable aliases | `downloads/<target>.zip` |
+| Server binaries | `downloads/wired-terminal-server_<version>_linux-x86_64.tar.gz` |
+| Server alias | `downloads/linux-x86_64-server.tar.gz` |
 
 Targets are `macos-aarch64`, `macos-x86_64`, `windows-x86_64` and
 `linux-x86_64` — one per build, because macOS here is two builds rather than a
@@ -30,7 +32,17 @@ universal one.
 downloads to offer. No manifest means the site says builds are not published
 yet, so nothing has to be switched on there when the first release lands.
 
-The manifest carries two maps and they are not the same thing:
+The server tarball is the odd one out, because `tauri-action` does not build it.
+It bundles a desktop app; a headless install wants the two binaries themselves,
+and unpacking a `.deb` to fish one out is not an install path. So `release.yml`
+runs a plain `cargo build --release` on the Linux runner and ships
+`wired-backend` + `wired` flat in a `.tar.gz`. Without it,
+`scripts/install-ubuntu.sh` has nothing to download and every server install
+adds apt and rustup and compiles Rust on the target box — which is why the smoke
+check at the end of the publish job **fails the release** when that entry goes
+missing, rather than letting the toolchain quietly come back.
+
+The manifest carries three maps and they are not the same thing:
 
 - **`platforms`** is Tauri's updater contract — a signed URL per platform. It
   is empty until updater signing is wired up (below), and an empty one is a
@@ -39,6 +51,11 @@ The manifest carries two maps and they are not the same thing:
 - **`downloads`** is ours: target → URL, so the site links installers instead
   of reconstructing filenames. Renaming an artefact here cannot silently 404
   there.
+- **`server`** is the headless pair, kept apart because a `.deb` and a systemd
+  install are not the same download. `install-ubuntu.sh` never reads this map —
+  it `curl`s the stable alias, so it needs no JSON parser and no `jq` on a box
+  that has nothing installed yet. The map is for anyone who wants the exact
+  version rather than the newest.
 
 Credentials: `CLOUDFLARE_ACCOUNT_ID` plus either `CLOUDFLARE_API_TOKEN`
 (Account → Workers R2 Storage → Edit, used via Wrangler) or the
