@@ -89,13 +89,23 @@ jobs:
       - name: Install frontend dependencies
         run: npm run install:all
 
+      # Compiles everywhere, so it runs everywhere: this is what catches code
+      # that only one platform rejects, which is how a Windows-only dead-code
+      # error was found the first time this workflow ever ran on Windows.
       - name: Check the backend
-        # Cheap here, and a release that fails to build on one platform should
-        # fail loudly rather than ship three of four artefacts.
         run: |
           cargo fmt --manifest-path crates/wired-backend/Cargo.toml -- --check
           cargo clippy --manifest-path crates/wired-backend/Cargo.toml -- -D warnings
-          cargo test --manifest-path crates/wired-backend/Cargo.toml
+
+      # The suite drives a real pseudo-terminal and a websocket, and it is
+      # timing-sensitive by nature. Linux is the canonical gate here and in
+      # ci.yml; making a release depend on a PTY test passing on three
+      # operating systems buys a coin-flip, not confidence. Windows support is
+      # verified by running docs/releasing.md's acceptance list on a real
+      # machine, not by this job going green.
+      - name: Test the backend
+        if: matrix.platform == 'ubuntu-22.04'
+        run: cargo test --manifest-path crates/wired-backend/Cargo.toml
 
       - uses: tauri-apps/tauri-action@v0
         env:
