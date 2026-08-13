@@ -5,7 +5,7 @@ bundles on a `v*` tag, attaches them to a draft GitHub release, and publishes
 the same artefacts to R2.
 
 ```
-git tag v1.0.4 && git push origin v1.0.4
+git tag v1.0.5 && git push origin v1.0.5
 ```
 
 ## Where the downloads live
@@ -20,27 +20,47 @@ on R2, because that is where versioned objects, stable aliases and a CDN are:
 | Manifest | `updates/latest.json` |
 | Installers | `downloads/wired-terminal_<version>_<target>.zip` |
 | Stable aliases | `downloads/<target>.zip` |
-| Server binaries | `downloads/wired-terminal-server_<version>_linux-x86_64.tar.gz` |
-| Server alias | `downloads/linux-x86_64-server.tar.gz` |
+| Server binaries | `downloads/wired-terminal-server_<version>_linux-{x86_64,aarch64}.tar.gz` |
+| Server aliases | `downloads/linux-{x86_64,aarch64}-server.tar.gz` |
 
 Targets are `macos-aarch64`, `macos-x86_64`, `windows-x86_64` and
 `linux-x86_64` — one per build, because macOS here is two builds rather than a
-universal one.
+universal one — plus `linux-aarch64`, which is server binaries with no installer
+behind it (below).
 
 `.github/scripts/publish-r2.mjs` does the upload, and
 <https://terminal.wired.dev> reads `latest.json` to decide whether it has
 downloads to offer. No manifest means the site says builds are not published
 yet, so nothing has to be switched on there when the first release lands.
 
-The server tarball is the odd one out, because `tauri-action` does not build it.
-It bundles a desktop app; a headless install wants the two binaries themselves,
-and unpacking a `.deb` to fish one out is not an install path. So `release.yml`
-runs a plain `cargo build --release` on the Linux runner and ships
-`wired-backend` + `wired` flat in a `.tar.gz`. Without it,
-`scripts/install-ubuntu.sh` has nothing to download and every server install
-adds apt and rustup and compiles Rust on the target box — which is why the smoke
-check at the end of the publish job **fails the release** when that entry goes
-missing, rather than letting the toolchain quietly come back.
+The server tarballs are the odd ones out, because `tauri-action` does not build
+them. It bundles a desktop app; a headless install wants the two binaries
+themselves, and unpacking a `.deb` to fish one out is not an install path. So
+`release.yml` runs a plain `cargo build --release` and ships `wired-backend` +
+`wired` flat in a `.tar.gz`. Without them, `scripts/install-ubuntu.sh` has
+nothing to download and every server install adds apt and rustup and compiles
+Rust on the target box — which is why the smoke check at the end of the publish
+job **fails the release** when either entry goes missing, rather than letting the
+toolchain quietly come back.
+
+There are two architectures because most cheap VPSes are ARM, and for two
+releases the only published Linux binaries were Intel — so the machine this
+feature existed for was the one machine it did not help. `linux-x86_64` comes off
+the matrix's Linux job; `linux-aarch64` comes from a separate
+`server-linux-arm64` job, and only the server binaries, never a bundle:
+
+- An ARM AppImage would mean cross-compiling the webkit stack, a different job
+  with a different failure surface, and nobody runs the GUI on a VPS.
+- It **cross-compiles** on an x86 runner with `gcc-aarch64-linux-gnu` rather
+  than using a GitHub ARM runner, which this plan does not offer private
+  repositories. That works only because the backend links rustls instead of a
+  system OpenSSL — the reason `Cargo.toml` gives for choosing it.
+- It then runs the result under `qemu-aarch64-static`, because a cross-build that
+  compiles but cannot execute is the failure worth catching in CI rather than on
+  someone's server.
+
+In the manifest that target appears in `server` and never in `downloads`, which
+is what `serverOnly` marks in `publish-r2.mjs`.
 
 The manifest carries three maps and they are not the same thing:
 

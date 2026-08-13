@@ -42,6 +42,9 @@ pub fn target_id() -> Option<&'static str> {
         ("macos", "x86_64") => Some("macos-x86_64"),
         ("windows", "x86_64") => Some("windows-x86_64"),
         ("linux", "x86_64") => Some("linux-x86_64"),
+        // Server binaries only — there is no ARM Linux desktop bundle, so this
+        // id appears in the manifest's `server` map and not in `downloads`.
+        ("linux", "aarch64") => Some("linux-aarch64"),
         _ => None,
     }
 }

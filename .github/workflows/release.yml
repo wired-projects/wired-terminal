@@ -204,17 +204,84 @@ jobs:
             wired-terminal-server_*.tar.gz
           if-no-files-found: warn
 
+  # ARM servers, which are most of the cheap ones — the pilot box is aarch64
+  # Ubuntu 24.04, and until this existed the only published Linux binaries were
+  # Intel, so that machine fell back to installing rustup and compiling on
+  # itself. Everything the 1.0.3 server work claimed was true only on x86.
+  #
+  # Server binaries only, deliberately: this builds the two headless binaries
+  # and not a desktop bundle. An ARM AppImage would need the whole webkit stack
+  # cross-compiled, which is a different job with a different failure surface,
+  # and nobody is running the GUI on a VPS.
+  #
+  # Cross-compiled rather than run on an ARM runner, because GitHub's are not
+  # available to private repositories on this plan. It works because the backend
+  # links rustls instead of a system OpenSSL — the reason Cargo.toml gives for
+  # choosing it — so the cross toolchain's libc is the only system dependency.
+  server-linux-arm64:
+    name: Linux server (arm64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: crates/wired-backend
+          key: aarch64-unknown-linux-gnu
+
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update -qq
+          # The linker, plus qemu so the result can be run rather than merely
+          # produced — a cross-build that cannot execute is the failure mode
+          # worth catching here rather than on someone's server.
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu qemu-user-static
+
+      - name: Build the server binaries for arm64
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu \
+            --manifest-path crates/wired-backend/Cargo.toml \
+            --bin wired-backend --bin wired
+          out=crates/wired-backend/target/aarch64-unknown-linux-gnu/release
+          file "$out/wired" "$out/wired-backend"
+          # 22.04's cross toolchain targets glibc 2.35, so anything newer runs
+          # it. The installer re-checks on the target box before trusting it.
+          qemu-aarch64-static "$out/wired" --version
+
+          staging="$(mktemp -d)"
+          install -m 0755 "$out/wired-backend" "$out/wired" "$staging/"
+          tar -czf wired-terminal-server_linux-aarch64.tar.gz \
+            -C "$staging" wired-backend wired
+          ls -l wired-terminal-server_linux-aarch64.tar.gz
+
+      - name: Upload artifacts for the R2 publish
+        uses: actions/upload-artifact@v4
+        with:
+          # Named for the target triple like the matrix ones, because
+          # publish-r2.mjs scopes files by the directory they arrive in.
+          name: wired-terminal-aarch64-unknown-linux-gnu
+          path: wired-terminal-server_linux-aarch64.tar.gz
+          if-no-files-found: error
+
   publish-r2:
     name: Publish to R2
-    needs: build
+    needs: [build, server-linux-arm64]
     runs-on: ubuntu-latest
     # A tag always publishes; a manual run publishes unless told not to. One
     # failed platform must not silently ship a partial release, so this needs
-    # the whole matrix green.
+    # the whole matrix green — and the arm64 server job too, or a release could
+    # publish with ARM boxes quietly dropped back to compiling.
     if: |
       always()
       && !cancelled()
       && needs.build.result == 'success'
+      && needs['server-linux-arm64'].result == 'success'
       && (
         startsWith(github.ref, 'refs/tags/v')
         || (github.event_name == 'workflow_dispatch' && inputs.upload_r2)
@@ -300,14 +367,22 @@ jobs:
             console.log("OK version", j.version,
               "| downloads:", Object.keys(j.downloads).join(", "),
               "| signed updater platforms:", signed || "none (auto-update off)");
-            // scripts/install-ubuntu.sh curls the alias below and only compiles
-            // when it 404s. A release that quietly stopped publishing it would
-            // put a Rust toolchain back on every server install, silently.
-            if (!j.server || !j.server["linux-x86_64"]) {
-              console.error("no server binaries in latest.json — install-ubuntu.sh would fall back to compiling");
+            // scripts/install-ubuntu.sh curls these aliases and only compiles
+            // when one 404s. A release that quietly stopped publishing them
+            // would put a Rust toolchain back on every server install,
+            // silently — and arm64 is checked by name because it was missing
+            // for two releases without anything noticing.
+            const missing = ["linux-x86_64", "linux-aarch64"].filter(
+              (id) => !j.server || !j.server[id],
+            );
+            if (missing.length) {
+              console.error("no server binaries for", missing.join(", "),
+                "— those installs would fall back to compiling");
               process.exit(1);
             }
-            console.log("server tarball:", j.server["linux-x86_64"].alias);
+            for (const id of ["linux-x86_64", "linux-aarch64"]) {
+              console.log("server tarball:", id, j.server[id].alias);
+            }
           '
           # Advisory, not a gate. The manifest check above is the real one; this
           # HEAD can lose a race with edge propagation, and a green release that

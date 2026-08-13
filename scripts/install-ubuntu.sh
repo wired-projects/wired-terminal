@@ -191,11 +191,13 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HAVE_SRC=0
 [ -f "$SRC_DIR/crates/wired-backend/Cargo.toml" ] && HAVE_SRC=1
 
-# Binaries are published for x86_64 only. Any other architecture compiles, so
-# this must not "helpfully" download an amd64 tarball onto an ARM box.
+# Intel and ARM are both published — most cheap VPSes are ARM, and until 1.0.5
+# they were the ones stuck compiling. Anything else still compiles, and must
+# never be handed an amd64 tarball just because one exists.
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64) SERVER_TARGET="linux-x86_64" ;;
+  aarch64|arm64) SERVER_TARGET="linux-aarch64" ;;
   *) SERVER_TARGET="" ;;
 esac
 if [ -z "$SERVER_URL" ] && [ -n "$SERVER_TARGET" ]; then

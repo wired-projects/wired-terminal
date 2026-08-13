@@ -51,7 +51,7 @@ the minutes-long path — only when it has to:
 
 | | |
 |---|---|
-| Not x86_64 | binaries are published for `linux-x86_64` only |
+| Not x86_64 or arm64 | binaries are published for those two only |
 | No download | the bucket is unreachable, or the release has no server tarball |
 | Won't run here | the tarball is built on Ubuntu 22.04, so glibc 2.35 is its floor |
 | You asked | `--from-source` |

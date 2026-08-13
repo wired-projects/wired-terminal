@@ -117,6 +117,17 @@ const TARGETS = [
     // published for this target cannot be mistaken for one another.
     serverAsset: (f) => /-server_.*\.tar\.gz$/i.test(base(f)),
   },
+  {
+    id: "linux-aarch64",
+    label: "Linux server (arm64)",
+    dir: "aarch64-unknown-linux-gnu",
+    // No desktop bundle for this one: the arm64 job builds the two headless
+    // binaries and nothing else, because an ARM AppImage would mean
+    // cross-compiling webkit and nobody runs the GUI on a VPS. `serverOnly`
+    // is what stops the loop below discarding it for having no installer.
+    serverOnly: true,
+    serverAsset: (f) => /-server_.*\.tar\.gz$/i.test(base(f)),
+  },
 ];
 
 function die(msg) {
@@ -258,53 +269,59 @@ function main() {
       continue;
     }
 
-    const installers = files.filter((f) => !isSig(f) && target.installer(f));
-    if (installers.length === 0) {
+    const installers = target.serverOnly
+      ? []
+      : files.filter((f) => !isSig(f) && target.installer(f));
+    if (installers.length === 0 && !target.serverOnly) {
       console.warn(`WARN: ${target.label}: no installer found in ${target.dir}`);
       continue;
     }
-    console.log(`\n${target.label}: ${installers.map(base).join(", ")}`);
+    console.log(
+      `\n${target.label}: ${target.serverOnly ? "server binaries only" : installers.map(base).join(", ")}`,
+    );
 
     // ── The download: one zip per target, versioned and aliased ──────────
-    const stage = join(staging, target.id);
-    mkdirSync(stage, { recursive: true });
-    const staged = installers.map((f) => {
-      const dest = join(stage, base(f));
-      copyFileSync(f, dest);
-      return dest;
-    });
-
-    const filename = `${STEM}_${version}_${target.id}.zip`;
-    const verZip = join(staging, filename);
-    zipFiles(verZip, staged);
-
-    if (DRY_RUN) {
-      // putObject would stat a zip that was never written; say what it would do.
-      console.log(`  dry-run put downloads/${filename}`);
-      console.log(`  dry-run put downloads/${target.id}.zip`);
-    } else {
-      putObject(`downloads/${filename}`, verZip, {
-        contentType: "application/zip",
-        contentDisposition: `attachment; filename="${filename}"`,
-        cacheControl: "public, max-age=31536000, immutable",
+    if (!target.serverOnly) {
+      const stage = join(staging, target.id);
+      mkdirSync(stage, { recursive: true });
+      const staged = installers.map((f) => {
+        const dest = join(stage, base(f));
+        copyFileSync(f, dest);
+        return dest;
       });
 
-      // The versioned object is immutable; the stable alias must revalidate so
-      // an old CDN entry never outlives a release. The site prefers versioned.
-      const aliasZip = join(staging, `${target.id}.zip`);
-      copyFileSync(verZip, aliasZip);
-      putObject(`downloads/${target.id}.zip`, aliasZip, {
-        contentType: "application/zip",
-        contentDisposition: `attachment; filename="${filename}"`,
-        cacheControl: "public, max-age=0, must-revalidate",
-      });
+      const filename = `${STEM}_${version}_${target.id}.zip`;
+      const verZip = join(staging, filename);
+      zipFiles(verZip, staged);
+
+      if (DRY_RUN) {
+        // putObject would stat a zip that was never written; say what it would do.
+        console.log(`  dry-run put downloads/${filename}`);
+        console.log(`  dry-run put downloads/${target.id}.zip`);
+      } else {
+        putObject(`downloads/${filename}`, verZip, {
+          contentType: "application/zip",
+          contentDisposition: `attachment; filename="${filename}"`,
+          cacheControl: "public, max-age=31536000, immutable",
+        });
+
+        // The versioned object is immutable; the stable alias must revalidate so
+        // an old CDN entry never outlives a release. The site prefers versioned.
+        const aliasZip = join(staging, `${target.id}.zip`);
+        copyFileSync(verZip, aliasZip);
+        putObject(`downloads/${target.id}.zip`, aliasZip, {
+          contentType: "application/zip",
+          contentDisposition: `attachment; filename="${filename}"`,
+          cacheControl: "public, max-age=0, must-revalidate",
+        });
+      }
+
+      downloads[target.id] = {
+        label: target.label,
+        filename,
+        url: `${PUBLIC_BASE}/downloads/${filename}?v=${encodeURIComponent(version)}`,
+      };
     }
-
-    downloads[target.id] = {
-      label: target.label,
-      filename,
-      url: `${PUBLIC_BASE}/downloads/${filename}?v=${encodeURIComponent(version)}`,
-    };
 
     // ── The headless server binaries, for targets that ship them ────────
     // Before the updater block on purpose: that one bails early when nothing is
@@ -343,6 +360,10 @@ function main() {
     }
 
     // ── The updater entry, when it is signed ────────────────────────────
+    // Nothing to update in place for a server-only target: there is no app,
+    // and `wired update` swaps binaries itself rather than going through
+    // Tauri's updater.
+    if (!target.updaterAsset) continue;
     const asset = files.find((f) => !isSig(f) && target.updaterAsset(f));
     const sig = asset
       ? files.find((f) => isSig(f) && base(f) === `${base(asset)}.sig`)
