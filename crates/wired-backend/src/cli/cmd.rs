@@ -446,19 +446,43 @@ fn writable_install_dir() -> Result<()> {
         .parent()
         .ok_or("could not find the directory I am installed in")?;
 
+    // Both arms answer the same question, because there is no portable way to
+    // ask it. Windows has no access(2) worth trusting — its answer ignores ACLs,
+    // which are the thing that actually decides — so there the only honest test
+    // is to try, and clean up after.
     #[cfg(unix)]
-    {
+    let writable = {
         use std::os::unix::ffi::OsStrExt as _;
-        let c = std::ffi::CString::new(dir.as_os_str().as_bytes())
+        let path = std::ffi::CString::new(dir.as_os_str().as_bytes())
             .map_err(|_| "the install path has a NUL in it".to_string())?;
-        // access(2) rather than a probe file: asking is cheaper than writing,
-        // and leaves nothing behind when the answer is no.
-        if unsafe { libc::access(c.as_ptr(), libc::W_OK) } != 0 {
-            return Err(format!(
-                "{} is not writable by this user: sudo wired update",
-                dir.display()
-            ));
+        // Cheaper than writing, and leaves nothing behind when the answer is no.
+        let rc = unsafe { libc::access(path.as_ptr(), libc::W_OK) };
+        rc == 0
+    };
+    #[cfg(not(unix))]
+    let writable = {
+        let probe = dir.join(".wired-update-probe");
+        match std::fs::File::create(&probe) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+                true
+            }
+            Err(_) => false,
         }
+    };
+
+    if !writable {
+        // The way to get permission differs, and naming the wrong one is worse
+        // than naming none.
+        let elevate = if cfg!(windows) {
+            "run it from an Administrator prompt"
+        } else {
+            "sudo wired update"
+        };
+        return Err(format!(
+            "{} is not writable by this user: {elevate}",
+            dir.display()
+        ));
     }
     Ok(())
 }
