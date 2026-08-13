@@ -36,6 +36,7 @@ pub mod settings_store;
 pub mod setup;
 pub mod terminal_clean;
 pub mod transcript;
+pub mod update;
 pub mod vt_screen;
 
 use std::net::SocketAddr;

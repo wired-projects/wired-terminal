@@ -202,6 +202,7 @@ pub fn router(state: AppState) -> Router {
 
     let api = Router::new()
         .route("/api/health", get(health))
+        .route("/api/update", get(update_check))
         .route("/api/providers", get(list_providers))
         .route("/api/agent/status", get(agent_status))
         .route("/api/agent/configure", post(agent_configure))
@@ -325,6 +326,15 @@ async fn reader() -> Response {
 }
 
 // ── health / providers ──────────────────────────────────────────────────
+
+/// Is a newer version published, and where is it.
+///
+/// The app asks on launch and `wired update` asks on demand. Kept out of
+/// `/api/health` on purpose: health is a local question answered instantly,
+/// and this one reaches the network and can time out.
+async fn update_check() -> Json<Value> {
+    Json(serde_json::to_value(crate::update::check().await).unwrap_or_else(|_| json!({})))
+}
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
     let providers: HashMap<String, Value> = probe_providers()

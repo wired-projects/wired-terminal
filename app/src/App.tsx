@@ -12,7 +12,7 @@ import { Welcome } from './components/Welcome';
 import { Wizard } from './components/Wizard';
 import { providerMeta } from './components/ProviderIcon';
 import { useBackendStatus } from './hooks/useBackendStatus';
-import { api, desktop, type ProviderId } from './lib/api';
+import { api, desktop, type ProviderId, type UpdateStatus } from './lib/api';
 import { explain, type Remedy } from './lib/errors';
 
 /**
@@ -164,6 +164,29 @@ export default function App() {
     [fail, markBusy],
   );
 
+  // ── is a newer version out ───────────────────────────────────────────
+  // Asked once, on launch. There is no auto-update to trigger: the artefacts
+  // are not signed yet, so the honest move is to say a version exists and let
+  // the person decide. A failed check is silent — being offline is not an
+  // error worth a banner.
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+  useEffect(() => {
+    if (online !== true) return;
+    let cancelled = false;
+    void api
+      .update()
+      .then((status) => {
+        if (!cancelled && status.available) setUpdate(status);
+      })
+      .catch(() => {
+        /* no version banner is better than a wrong one */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [online]);
+
   // ── notifications ────────────────────────────────────────────────────
   const notifiedFor = useRef<number | null>(null);
   useEffect(() => {
@@ -266,6 +289,32 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {update && !updateDismissed && (
+        <div className="banner banner-info fade-in" role="status">
+          <span>
+            <strong>Version {update.latest} is out.</strong> This is {update.current}.
+          </span>
+          <span className="button-row">
+            {update.download && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void desktop.openPath(update.download!)}
+              >
+                Download it
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setUpdateDismissed(true)}
+            >
+              Later
+            </button>
+          </span>
+        </div>
+      )}
 
       {banner && (
         <div className="banner fade-in" role="alert">

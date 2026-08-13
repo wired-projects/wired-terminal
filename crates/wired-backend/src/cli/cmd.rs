@@ -329,6 +329,119 @@ pub async fn approve(ui: &Ui, target: &Target, allow: bool) -> Result<i32> {
 
 // ── setup ───────────────────────────────────────────────────────────────
 
+/// `wired update` — ask the manifest, then reinstall from source if asked to.
+///
+/// The check goes through the target's API rather than being done here, so
+/// `--remote pilot update --check` reports that server's version and not this
+/// laptop's. Applying an update is local-only: it rebuilds and restarts a
+/// service, which over an SSH tunnel would be a surprise rather than a
+/// convenience.
+pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Result<i32> {
+    let api = Api::connect(target).await?;
+    let status = api.get("/api/update").await?;
+
+    let current = str_at(&status, &["current"]);
+    let latest = status["latest"].as_str();
+    let available = bool_at(&status, &["available"]);
+
+    ui.heading("Version");
+    ui.field("running", current);
+    match latest {
+        Some(latest) => ui.field("published", latest),
+        None => ui.field("published", "unknown"),
+    }
+    if let Some(date) = status["pub_date"].as_str() {
+        ui.field("released", date);
+    }
+    if let Some(reason) = status["error"].as_str() {
+        ui.note(reason);
+    }
+
+    if !available {
+        if latest.is_some() {
+            ui.note("Up to date.");
+        }
+        return Ok(EXIT_OK);
+    }
+
+    if let Some(notes) = status["notes"].as_str().filter(|n| !n.is_empty()) {
+        ui.field("notes", notes);
+    }
+    ui.warn(&format!(
+        "{} is out; this is {current}.",
+        latest.unwrap_or("a newer version")
+    ));
+
+    if check_only {
+        // Non-zero so a cron line can act on it, the same way `doctor` does.
+        return Ok(EXIT_UNHEALTHY);
+    }
+
+    if !matches!(target, Target::Local { .. }) {
+        return Err(
+            "an update rebuilds and restarts the service, so run it on that machine:\n               ssh <host> sudo wired update"
+                .into(),
+        );
+    }
+
+    let Some(installer) = source_installer() else {
+        let download = status["download"]
+            .as_str()
+            .unwrap_or("https://terminal.wired.dev/#install");
+        ui.note("This install has no source checkout beside it, so there is nothing to rebuild.");
+        ui.note(&format!("Download the new version: {download}"));
+        return Ok(EXIT_OK);
+    };
+
+    if !confirm(
+        ui,
+        yes,
+        &format!(
+            "Rebuild from source and restart the service? ({})",
+            installer.display()
+        ),
+    )? {
+        ui.note("Left alone.");
+        return Ok(EXIT_OK);
+    }
+
+    // The installer already knows how to upgrade in place: it fetches, resets,
+    // rebuilds incrementally and restarts. Re-running it is the update.
+    ui.note("Running the installer; this rebuilds the backend and can take a few minutes.");
+    let status = std::process::Command::new("sudo")
+        .arg("bash")
+        .arg(&installer)
+        .status()
+        .map_err(|e| format!("could not run {}: {e}", installer.display()))?;
+
+    if !status.success() {
+        return Err(format!(
+            "{} exited with {}",
+            installer.display(),
+            status.code().unwrap_or(-1)
+        ));
+    }
+    ui.note("Updated. `wired status` to see the new version.");
+    Ok(EXIT_OK)
+}
+
+/// The checkout the running binary was installed from, if there is one.
+///
+/// A server install puts the CLI at `<dir>/bin/wired` and the source at
+/// `<dir>/src`, so the binary's own path answers this without a config file.
+fn source_installer() -> Option<std::path::PathBuf> {
+    let candidate = match std::env::var_os("WIRED_SRC_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::current_exe()
+            .ok()?
+            .parent()?
+            .parent()?
+            .join("src"),
+    };
+    let installer = candidate.join("scripts/install-ubuntu.sh");
+    installer.is_file().then_some(installer)
+}
+
 pub async fn doctor(ui: &Ui, target: &Target, show_log: bool, json_out: bool) -> Result<i32> {
     let api = Api::connect(target).await?;
     let report = api.get("/api/diagnostics").await?;

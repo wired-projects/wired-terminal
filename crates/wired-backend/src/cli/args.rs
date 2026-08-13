@@ -24,6 +24,7 @@ THE SERVICE
   start [--provider X]   start the service, then the agent session
   stop [--agent]         stop the service (--agent stops only the session)
   restart                restart the service and wait for the API
+  update [--check]       is a newer version out, and install it if so
   logs [-f] [-n N]       journalctl, or the log file when there is no systemd
   serve                  run the backend here, in the foreground
 
@@ -75,6 +76,7 @@ pub enum Command {
     Watch,
     Approve { allow: bool },
     Doctor { log: bool },
+    Update { check_only: bool, yes: bool },
     Pair(Pair),
     Schedule(ScheduleCmd),
     Remote(RemoteCmd),
@@ -225,6 +227,7 @@ pub fn parse(argv: Vec<String>) -> ParseResult<Cli> {
         "watch" | "tail" => Command::Watch,
         "approve" | "yes" => parse_approve(rest)?,
         "doctor" | "check" => parse_doctor(rest)?,
+        "update" | "upgrade" => parse_update(rest)?,
         "pair" => parse_pair(rest)?,
         "schedule" | "schedules" => parse_schedule(rest)?,
         "remote" | "remotes" => parse_remote(rest)?,
@@ -347,6 +350,19 @@ fn parse_doctor(rest: Vec<String>) -> ParseResult<Command> {
         }
     }
     Ok(Command::Doctor { log })
+}
+
+fn parse_update(rest: Vec<String>) -> ParseResult<Command> {
+    let mut check_only = false;
+    let mut yes = false;
+    for arg in &rest {
+        match arg.as_str() {
+            "--check" | "--dry-run" => check_only = true,
+            "-y" | "--yes" => yes = true,
+            other => return Err(format!("update: unexpected argument {other}")),
+        }
+    }
+    Ok(Command::Update { check_only, yes })
 }
 
 fn parse_pair(rest: Vec<String>) -> ParseResult<Command> {
@@ -511,6 +527,7 @@ pub fn help_for(topic: &str) -> String {
         "ask" => "wired ask <text> [--wait SECONDS | --no-wait]\n\n  Types the text into the live agent session and prints what comes back.\n  Words are joined, so quotes are optional.\n\n  --wait N    how long to collect the reply (default 90)\n  --no-wait   send and return immediately",
         "watch" => "wired watch\n\n  Follows the transcript the way the /reader page does: one line per turn,\n  no spinners or repaints. Ctrl-C detaches and leaves the agent running.",
         "approve" => "wired approve [--deny]\n\n  Answers the approval dialog the agent is blocked on. Reads the menu\n  before answering, so it picks the option that means yes rather than\n  assuming a position.",
+        "update" => "wired update [--check] [--yes]\n\n  Asks the published manifest whether a newer version is out, then\n  reinstalls from source and restarts the service.\n\n  --check  only say what is out; change nothing\n  --yes    do not ask before reinstalling\n\n  Exit codes with --check: 0 up to date, 2 an update is available. That is\n  what makes it usable from cron.\n\n  A desktop install updates by downloading the new app, so there this prints\n  the link rather than pretending it can replace a running .app.",
         "doctor" => "wired doctor [--log]\n\n  The setup checks: agent CLI installed, signed in, working folder\n  writable, ports, chat bridge. Exits non-zero if a check failed.\n\n  --log    also print recent log lines",
         "pair" => "wired pair                    pending requests and paired chats\nwired pair approve <code>     allow a chat to drive the agent\nwired pair deny <code>\nwired pair unpair <chat-id>   revoke one that was allowed\nwired pair reset [--yes]      forget the bot token and unpair everything\n\n  `unpair` leaves the bot running, so that phone can pair again with a fresh\n  code. `reset` throws the token away too — use it when rotating to a new bot,\n  and revoke the old token in BotFather afterwards.",
         "schedule" => "wired schedule                list scheduled tasks and when they next run\nwired schedule run <id>       run one now\nwired schedule delete <id>",

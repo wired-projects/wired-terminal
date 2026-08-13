@@ -327,6 +327,17 @@ export interface DiagnosticsReport {
 
 // ── endpoints ─────────────────────────────────────────────────────────
 
+export type UpdateStatus = {
+  current: string;
+  latest: string | null;
+  available: boolean;
+  notes: string | null;
+  pub_date: string | null;
+  download: string | null;
+  checked: boolean;
+  error: string | null;
+};
+
 export const api = {
   health: (timeoutMs = 2500) => request<HealthResponse>('/api/health', { timeoutMs }),
 
@@ -410,6 +421,11 @@ export const api = {
     request<{ hits: { day: string; event: HistoryEvent }[] }>(
       `/api/history/search?query=${encodeURIComponent(query)}`,
     ),
+
+  // ── updates ──
+  // Reaches the network on the backend's side, so it gets a longer leash than
+  // a local read and is never allowed to block the UI.
+  update: () => request<UpdateStatus>('/api/update', { timeoutMs: 8000 }),
 
   // ── diagnostics ──
   diagnostics: () => request<DiagnosticsReport>('/api/diagnostics'),

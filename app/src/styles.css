@@ -436,6 +436,12 @@ textarea.field {
   color: var(--danger);
 }
 
+.banner-info {
+  background: var(--accent-soft);
+  border-bottom-color: var(--accent-border);
+  color: var(--text);
+}
+
 .toast {
   padding: 9px 11px;
   border: 1px solid transparent;

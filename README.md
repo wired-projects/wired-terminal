@@ -73,6 +73,7 @@ wired watch                               # live transcript, ctrl-c to detach
 wired approve                             # answer what the agent is blocked on
 wired logs -f
 wired restart
+wired update                              # is a newer version out, and install it
 wired doctor                              # the setup checks, with an exit code
 ```
 
@@ -357,6 +358,7 @@ curl -sX POST http://127.0.0.1:8000/api/agent/message \
 | `POST /api/schedules/run` | Fire one now |
 | `GET /api/history/days`, `/day`, `/search` | Persisted transcript |
 | `GET /api/diagnostics` | Version, paths, chain checks, log tail |
+| `GET /api/update` | Is a newer version published, and where to get it |
 | `GET /reader` | Readable live transcript in a browser |
 | `WS /ws` | Live terminal stream |
 | `POST /mcp` | MCP server — the agent-facing surface |
