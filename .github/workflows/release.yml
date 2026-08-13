@@ -4,10 +4,10 @@ name: Release
 # is attached to the release — the whole point being that a non-coder downloads
 # one file rather than cloning a repository and installing a Rust toolchain.
 #
-# Signing is opt-in by secret: the workflow runs unsigned if the certificates
-# are not configured, so a fork can still produce artefacts. See
-# `docs/releasing.md` for what each secret is and why an unsigned macOS build
-# reports itself as "damaged".
+# Releases are unsigned: there is no paid Apple or Windows certificate behind
+# this project by choice, so builds are ad-hoc signed and free, and a fork needs
+# no secrets to produce artefacts. `docs/releasing.md` covers what that costs
+# users and why ad-hoc is still not the same as unsigned.
 #
 # A second job publishes the same artefacts to R2
 # (wired-terminal-releases → https://wired-terminal-releases.wired.dev), which
@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to publish (e.g. v1.0.1)'
+        description: 'Tag to publish (e.g. v1.0.2)'
         required: true
       release_notes:
         description: 'Notes for latest.json (defaults to the tag)'
@@ -110,22 +110,34 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing is opt-in, and the mechanism matters more than it looks.
-          # Tauri asks whether APPLE_CERTIFICATE is *set*, not whether it has
-          # a value, and `${{ secrets.MISSING }}` sets it to an empty string.
-          # Passing these unconditionally is what made an unsigned build fail
-          # with "security import: failed to import keychain certificate"
-          # instead of skipping signing, so they are not passed at all.
+          # There is no Apple Developer account and no Windows code-signing
+          # certificate behind this project, and none is planned, so nothing
+          # here reads a certificate secret. Releases are unsigned by intent;
+          # docs/troubleshooting.md walks people past the dialogs that causes.
           #
-          # To sign: add the six APPLE_* secrets (and the two WINDOWS_* ones)
-          # from docs/releasing.md, then add them back here as
-          #   APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          # An env key whose value is empty is worse than a missing key.
+          # Ad-hoc signing is free, and it is the one piece that is not
+          # optional. Without it the only signature in the bundle is the one the
+          # linker puts on the inner binary, whose CodeDirectory claims sealed
+          # resources that no `_CodeSignature/CodeResources` provides — so
+          # `codesign --verify` fails with "code has no resources but signature
+          # indicates they must be present". Gatekeeper reads that broken state
+          # as **"damaged"**, the one dialog with no way past it. An app that is
+          # merely unsigned gets "Apple could not verify…" and an Open Anyway
+          # button in Privacy & Security instead, which is the outcome
+          # troubleshooting.md documents.
           #
-          # Minisign key for the Tauri updater, which is a different thing
-          # from Apple/Windows code signing. This one is set, so it is passed.
-          # Its PASSWORD counterpart is not set and is left out for the same
-          # reason as the certificates above.
+          # `-` means ad-hoc: no certificate, no keychain, no cost. It is also a
+          # real value rather than an empty string — Tauri checks whether these
+          # variables are *set*, not whether they have a value, which is how an
+          # empty `${{ secrets.MISSING }}` once failed a build with "security
+          # import: failed to import keychain certificate" instead of skipping
+          # signing. That is why this is a literal and not a secret lookup.
+          APPLE_SIGNING_IDENTITY: '-'
+          #
+          # Minisign key for the Tauri updater — a different thing from Apple
+          # and Windows code signing, and free. This one is set, so it is
+          # passed. Its PASSWORD counterpart is not set, and an empty value
+          # would hit the same trap as above, so it is left out entirely.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           projectPath: app

@@ -9,10 +9,11 @@ exist; [`server.md`](server.md#when-it-goes-wrong) has the same problems with
 
 ---
 
-## It says "Wired is damaged and can't be opened"
+## macOS blocked it: "Apple could not verify" or "damaged"
 
-Your Mac says this about any app that was not signed with a paid Apple
-certificate. It is not about the contents of the file.
+Wired is not signed with a paid Apple certificate — it never will be, and that is
+a deliberate choice, not an oversight. Your Mac says one of these about any such
+app. Nothing is wrong with the file you downloaded.
 
 1. Open **System Settings → Privacy & Security**.
 2. Scroll down. There is a line saying *"Wired Terminal" was blocked*, with an
@@ -21,8 +22,19 @@ certificate. It is not about the contents of the file.
 
 You only do this once.
 
-If you do not see that line, the file may have been quarantined on download.
-Right-click Wired in your Applications folder, choose **Open**, and confirm.
+**If there is no such line, and right-click → Open does not work either**, your
+Mac is refusing before it offers you the choice. Releases built before v1.0.2
+land in that state. Open **Terminal** (⌘-Space, type `Terminal`) and paste this
+one line, which clears the "downloaded from the internet" mark macOS attaches to
+the file:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Wired Terminal.app"
+```
+
+Then open Wired normally. If it still refuses, the copy is genuinely incomplete
+— download it again, and drag it to **Applications** before opening it rather
+than opening it from inside the disk image.
 
 ## Windows says "Windows protected your PC"
 

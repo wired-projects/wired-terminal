@@ -115,12 +115,14 @@ ship a real double-clickable app with nothing underneath it.
 - [x] `.github/workflows/release.yml` — builds macOS (arm64 + x86_64), Windows
       and Linux on a `v*` tag and attaches the bundles to a draft release. Plus
       `ci.yml` for fmt, clippy, tests, typecheck and build on every push.
-- [x] ⏳ **Sign and notarize the macOS build.** The workflow reads
-      `APPLE_CERTIFICATE` / `APPLE_ID` / `APPLE_TEAM_ID` and friends, and runs
-      unsigned when they are absent. **Blocked on an Apple Developer account** —
-      enrolment is US$99/year and takes days. [docs/releasing.md](docs/releasing.md)
-      has the step-by-step.
-- [x] ⏳ Windows signing wired the same way (`WINDOWS_CERTIFICATE`); without it,
+- [x] **Signing: not happening, and no longer pending.** No Apple Developer
+      account (US$99/year) and no Windows certificate, by choice — the
+      certificate plumbing is gone from the workflow rather than sitting there
+      waiting for secrets that will never be set. macOS builds are **ad-hoc**
+      signed, which is free and is what keeps Gatekeeper saying "Apple could not
+      verify…" (two clicks past) instead of **"damaged"** (no way past); see
+      [docs/releasing.md](docs/releasing.md#ad-hoc-signing-is-free-and-it-is-not-optional)
+      for why those are different failures. Windows ships unsigned;
       [docs/troubleshooting.md](docs/troubleshooting.md) documents the exact two
       clicks and the antivirus path.
 - [x] Windows code paths fixed: `which` now tries `.exe`/`.cmd`/`.bat` (npm
@@ -308,8 +310,8 @@ reached for curl.
 - [x] [**docs/troubleshooting.md**](docs/troubleshooting.md) — symptom → fix:
       *"It says damaged"*, *"It says offline"*, *"It stopped answering"*, *"How
       do I make it stop?"*, antivirus, phone pairing, missed schedules.
-- [x] [**docs/releasing.md**](docs/releasing.md) — signing, notarization, the
-      updater, and the acceptance list for a release.
+- [x] [**docs/releasing.md**](docs/releasing.md) — why releases are unsigned, why
+      ad-hoc signing still matters, the updater, and the acceptance list.
 - [ ] ⏳ Screenshots. `getting-started.md` is written to work without them and
       marks where each one goes; capturing them needs a person at a screen.
 - [ ] ⏳ A 60-second demo GIF at the top of the repo.
@@ -334,8 +336,6 @@ Telegram API.
 
 | | Waiting on |
 |---|---|
-| macOS signing + notarization | an Apple Developer account (US$99/yr, days to enrol) |
-| Windows signing | an OV/EV code-signing certificate |
 | Windows verification | a Windows machine; the code paths are fixed, not tested |
 | Automatic updates | release signing keys, which a repository cannot hold |
 | Landing page, screenshots, demo GIF | a person at a screen, and somewhere to host |

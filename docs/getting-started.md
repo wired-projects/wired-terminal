@@ -40,9 +40,11 @@ download the file for your computer:
 Open the file you downloaded and follow it. On a Mac, drag Wired into your
 Applications folder.
 
-**If your Mac says Wired "is damaged and can't be opened":** it is not damaged.
-That message appears when an app has not been signed with a paid Apple
-certificate. See [Troubleshooting](troubleshooting.md#it-says-wired-is-damaged).
+**If your Mac says "Apple could not verify Wired"**, or that Wired **"is damaged
+and can't be opened"**: it is not damaged. Both messages appear because Wired is
+not signed with a paid Apple certificate, which is a deliberate choice. See
+[Troubleshooting](troubleshooting.md#macos-blocked-it-apple-could-not-verify-or-damaged)
+for the way past each one.
 
 **If Windows shows a blue "Windows protected your PC" box:** click **More info**,
 then **Run anyway**. This appears for the same reason.

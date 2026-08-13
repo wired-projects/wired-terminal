@@ -5,7 +5,7 @@ bundles on a `v*` tag, attaches them to a draft GitHub release, and publishes
 the same artefacts to R2.
 
 ```
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.2 && git push origin v1.0.2
 ```
 
 ## Where the downloads live
@@ -56,54 +56,46 @@ wrangler r2 bucket cors set wired-terminal-releases \
 To publish without cutting a tag: **Actions → Release → Run workflow**, give it
 the tag to build and leave *Publish installers + latest.json to R2* ticked.
 
-The workflow runs unsigned when the signing secrets are absent, so a fork can
-still produce artefacts. Everything below is about making those artefacts open
-without a scary dialog.
+## Releases are unsigned, deliberately
 
-## Why signing matters more than it looks
+There is no Apple Developer account (US$99/year) and no Windows code-signing
+certificate behind this project, and neither is planned. Nothing in the workflow
+reads a certificate secret, so a fork needs none either. What that costs is one
+dialog per platform, and both are documented for users in
+[Troubleshooting](troubleshooting.md):
 
-An unsigned macOS build does not say "this developer is unknown". It says
-**"Wired Terminal is damaged and can't be opened"**, which reads as malware
-rather than as a missing certificate, and a non-coder will delete it. Budget for
-the Apple Developer account (US$99/year, and the enrolment itself can take days)
-before promising anyone a download link.
+| | What the user sees | Way past it |
+|---|---|---|
+| macOS | "Apple could not verify…" | **Open Anyway** in Privacy & Security |
+| Windows | "Windows protected your PC" | **More info** → **Run anyway** |
 
-## macOS: signing and notarization
+Expect antivirus false positives on Windows as well: an unsigned binary that
+installs other programs is exactly the shape heuristic scanners flag, and the
+support load is real.
 
-Needs an **Apple Developer ID Application** certificate.
+### Ad-hoc signing is free, and it is not optional
 
-1. Enrol at <https://developer.apple.com/programs/>.
-2. In the developer portal, create a *Developer ID Application* certificate and
-   download it.
-3. Export it from Keychain Access as a `.p12` with a password.
-4. Base64-encode it: `base64 -i certificate.p12 | pbcopy`.
-5. Create an app-specific password at <https://appleid.apple.com> for
-   notarization.
+*Unsigned* and *ad-hoc signed* sound like the same thing and are not. Skip the
+ad-hoc step and the only signature in the bundle is the one the linker puts on
+the inner binary, whose CodeDirectory declares sealed resources that no
+`_CodeSignature/CodeResources` provides:
 
-Then add these repository secrets:
+```
+$ codesign --verify --strict -vvv "/Applications/Wired Terminal.app"
+… code has no resources but signature indicates they must be present
+```
 
-| Secret | What it is |
-|---|---|
-| `APPLE_CERTIFICATE` | the base64 `.p12` from step 4 |
-| `APPLE_CERTIFICATE_PASSWORD` | the password from step 3 |
-| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
-| `APPLE_ID` | your Apple ID email |
-| `APPLE_PASSWORD` | the app-specific password from step 5 |
-| `APPLE_TEAM_ID` | the 10-character team id |
+Gatekeeper reads that as corruption rather than as a missing certificate, and
+says **"Wired Terminal is damaged and can't be opened. You should move it to the
+Bin"** — the one verdict with no **Open Anyway** button, so the two clicks in the
+table above are not reachable and a non-coder deletes the app. v1.0.1 shipped in
+that state.
 
-`tauri-action` picks all six up automatically. Nothing in
-`tauri.conf.json` needs changing.
-
-## Windows: signing, or the SmartScreen path
-
-An OV or EV code-signing certificate removes the "Windows protected your PC"
-dialog. Set `WINDOWS_CERTIFICATE` (base64 `.pfx`) and
-`WINDOWS_CERTIFICATE_PASSWORD`.
-
-Without one, [Troubleshooting](troubleshooting.md#windows-says-windows-protected-your-pc)
-documents the two clicks. Expect antivirus false positives as well: an unsigned
-binary that installs other programs is exactly the shape heuristic scanners flag,
-and the support load is real.
+`release.yml` therefore passes `APPLE_SIGNING_IDENTITY: '-'` — ad-hoc, meaning no
+certificate, no keychain and no cost, but a self-consistent signature. That is
+what turns "damaged" into a dialog with a way out. It is a literal rather than a
+secret lookup on purpose: Tauri checks whether these variables are *set*, not
+whether they hold a value, so an empty one is worse than an absent one.
 
 ## Windows: verify before shipping
 
