@@ -377,17 +377,25 @@ pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Re
         return Ok(EXIT_UNHEALTHY);
     }
 
+    // An update replaces the binaries on disk and restarts the unit, and both of
+    // those are local acts — this command over a tunnel would be reading one
+    // machine's version and writing another's.
     if !matches!(target, Target::Local { .. }) {
         return Err(
-            "an update rebuilds and restarts the service, so run it on that machine:\n               ssh <host> sudo wired update"
+            "an update replaces binaries and restarts the service, so run it on that machine:\n               ssh <host> sudo wired update"
                 .into(),
         );
     }
 
-    // Three ways to become the new version, best first: swap the published
-    // binaries, re-run the installer, or — for a desktop install, which is a
-    // signed `.app` rather than two binaries — say where the download is.
+    // Two ways to become the new version: swap the published binaries, or — for
+    // a desktop install, which is a signed `.app` rather than two binaries, and
+    // for an architecture nothing is published for — say where to get it.
     if let Some(url) = status["server_download"].as_str() {
+        // Before the question, not after it. /opt is root-owned on a normal
+        // install, so the common case is that this cannot work at all, and
+        // "answer yes, then be told to use sudo" wastes the one interaction.
+        writable_install_dir()?;
+
         if !confirm(ui, yes, "Install the new binaries and restart the service?")? {
             ui.note("Left alone.");
             return Ok(EXIT_OK);
@@ -424,6 +432,35 @@ pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Re
     ui.note("  sudo bash scripts/install-ubuntu.sh --binary <path to wired-backend>");
     ui.note(&format!("Or take the desktop build: {download}"));
     Ok(EXIT_OK)
+}
+
+/// Refuse early when the binaries cannot be replaced anyway.
+///
+/// `install_server_binaries` reports the same thing, but only once it is already
+/// downloading — which on a root-owned `/opt` means every non-root run asked a
+/// question it could never act on.
+fn writable_install_dir() -> Result<()> {
+    let exe =
+        std::env::current_exe().map_err(|e| format!("could not find my own location: {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or("could not find the directory I am installed in")?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let c = std::ffi::CString::new(dir.as_os_str().as_bytes())
+            .map_err(|_| "the install path has a NUL in it".to_string())?;
+        // access(2) rather than a probe file: asking is cheaper than writing,
+        // and leaves nothing behind when the answer is no.
+        if unsafe { libc::access(c.as_ptr(), libc::W_OK) } != 0 {
+            return Err(format!(
+                "{} is not writable by this user: sudo wired update",
+                dir.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Replace the running `wired-backend` and `wired` with the published pair.
