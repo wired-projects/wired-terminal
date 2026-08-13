@@ -414,21 +414,33 @@ pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Re
         return Ok(EXIT_OK);
     };
 
+    // `installer` is `<src>/scripts/install-ubuntu.sh`.
+    let src_dir = installer
+        .parent()
+        .and_then(|p| p.parent())
+        .ok_or("could not find the checkout around the installer")?;
+
     if !confirm(
         ui,
         yes,
         &format!(
-            "Rebuild from source and restart the service? ({})",
-            installer.display()
+            "Update the checkout to v{} and rebuild? ({})",
+            latest.unwrap_or("latest"),
+            src_dir.display()
         ),
     )? {
         ui.note("Left alone.");
         return Ok(EXIT_OK);
     }
 
-    // The installer already knows how to upgrade in place: it fetches, resets,
-    // rebuilds incrementally and restarts. Re-running it is the update.
-    ui.note("Running the installer; this rebuilds the backend and can take a few minutes.");
+    // Updating the checkout is the whole point, and skipping it was a bug that
+    // could not fix itself: `install-ubuntu.sh` contains no git at all — it
+    // builds whatever `$SRC_DIR` already holds — so re-running it against a
+    // stale checkout recompiles the version already installed and restarts onto
+    // it. Every `wired update` on such a box offered that same rebuild forever.
+    refresh_checkout(ui, src_dir, latest)?;
+
+    ui.note("Running the installer.");
     let status = std::process::Command::new("sudo")
         .arg("bash")
         .arg(&installer)
@@ -444,6 +456,63 @@ pub async fn update(ui: &Ui, target: &Target, check_only: bool, yes: bool) -> Re
     }
     ui.note("Updated. `wired status` to see the new version.");
     Ok(EXIT_OK)
+}
+
+/// Move the checkout to the published tag, so rebuilding from it produces
+/// something newer than what is already installed.
+///
+/// Refuses rather than guesses. A checkout that is not a git repository, or has
+/// edits in it, or has no such tag, is one this cannot safely move — and saying
+/// so beats both silently rebuilding the old version and quietly discarding
+/// someone's work.
+fn refresh_checkout(ui: &Ui, src: &std::path::Path, want: Option<&str>) -> Result<()> {
+    let Some(want) = want.filter(|v| !v.is_empty()) else {
+        return Err("the manifest did not say which version to move the checkout to".into());
+    };
+    if !src.join(".git").exists() {
+        return Err(format!(
+            "{} is not a git checkout, so a rebuild there cannot produce {want}.\n               \
+             Install the published binaries instead, or re-clone the repository.",
+            src.display()
+        ));
+    }
+
+    // Someone's uncommitted work is not this command's to move or discard.
+    if !git(src, &["status", "--porcelain"])?.trim().is_empty() {
+        return Err(format!(
+            "{} has uncommitted changes — update it yourself, then run this again.",
+            src.display()
+        ));
+    }
+
+    ui.note(&format!("Updating the checkout to v{want}."));
+    git(src, &["fetch", "--tags", "--quiet"])?;
+    git(src, &["checkout", "--quiet", &format!("v{want}")])?;
+    Ok(())
+}
+
+/// Run git in `src`, with its stderr as the error — git already explains itself
+/// better than a wrapper would.
+fn git(src: &std::path::Path, args: &[&str]) -> Result<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(src)
+        .args(args)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(format!(
+            "git {} failed: {}",
+            args[0],
+            if why.is_empty() {
+                "no reason given".into()
+            } else {
+                why
+            }
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 /// Replace the running `wired-backend` and `wired` with the published pair.
@@ -1039,6 +1108,75 @@ mod update_tests {
         assert_eq!(installed_version(&fx.bin, "wired"), "wired 1.0.2");
     }
 
+    // ── refresh_checkout ────────────────────────────────────────────────
+    // The rebuild fallback used to skip this entirely, which made it a loop: a
+    // stale checkout rebuilds the installed version and offers the same update
+    // again next time. These cover the cases where moving it is not safe.
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    /// A repo with one commit tagged v1.0.2, and v1.0.3 never created.
+    fn checkout() -> tempdir::TempDir {
+        let dir = tempdir::TempDir::new();
+        git_in(dir.path(), &["init", "--quiet"]);
+        git_in(dir.path(), &["config", "user.email", "t@example.com"]);
+        git_in(dir.path(), &["config", "user.name", "t"]);
+        std::fs::write(dir.path().join("file"), "one").unwrap();
+        git_in(dir.path(), &["add", "."]);
+        git_in(dir.path(), &["commit", "--quiet", "-m", "one"]);
+        git_in(dir.path(), &["tag", "v1.0.2"]);
+        dir
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_checkout_is_refused() {
+        let dir = tempdir::TempDir::new();
+        let err = refresh_checkout(&Ui::new(true), dir.path(), Some("1.0.3")).unwrap_err();
+        assert!(err.to_string().contains("not a git checkout"), "{err}");
+    }
+
+    #[test]
+    fn uncommitted_work_is_never_moved() {
+        let dir = checkout();
+        std::fs::write(dir.path().join("file"), "edited").unwrap();
+        let err = refresh_checkout(&Ui::new(true), dir.path(), Some("1.0.3")).unwrap_err();
+        assert!(err.to_string().contains("uncommitted changes"), "{err}");
+        // The edit is still there: refusing must not be destructive.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("file")).unwrap(),
+            "edited"
+        );
+    }
+
+    #[test]
+    fn a_version_with_no_such_tag_is_refused() {
+        let dir = checkout();
+        // No remote either, so the fetch is the first thing that cannot work —
+        // whichever step fails, the point is that it does not rebuild anyway.
+        let err = refresh_checkout(&Ui::new(true), dir.path(), Some("1.0.3")).unwrap_err();
+        assert!(err.to_string().starts_with("git "), "{err}");
+    }
+
+    #[test]
+    fn a_manifest_without_a_version_cannot_move_anything() {
+        let dir = checkout();
+        let err = refresh_checkout(&Ui::new(true), dir.path(), None).unwrap_err();
+        assert!(
+            err.to_string().contains("did not say which version"),
+            "{err}"
+        );
+    }
+
     /// No `tempfile` dependency for six tests; this is the whole of what they need.
     mod tempdir {
         use std::path::{Path, PathBuf};
@@ -1046,15 +1184,16 @@ mod update_tests {
         impl TempDir {
             #[allow(clippy::new_without_default)]
             pub fn new() -> Self {
-                let unique = format!(
-                    "wired-update-test-{}-{:?}",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos()
-                );
-                let path = std::env::temp_dir().join(unique);
+                // A counter, not a timestamp. These tests run as parallel
+                // threads of one process, and the clock is not granular enough
+                // to separate two of them — a collision meant two fixtures
+                // shared a directory and one's Drop deleted the other's install,
+                // which showed up as a version assertion failing about one run
+                // in ten.
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let path = std::env::temp_dir()
+                    .join(format!("wired-update-test-{}-{n}", std::process::id()));
                 std::fs::create_dir_all(&path).unwrap();
                 Self(path)
             }

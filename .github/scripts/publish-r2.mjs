@@ -101,11 +101,15 @@ const TARGETS = [
     label: "Linux",
     dir: "x86_64-unknown-linux-gnu",
     updaterKeys: ["linux-x86_64"],
-    updaterExt: ".AppImage.tar.gz",
+    updaterExt: ".AppImage",
     // Both, when both exist: an AppImage runs anywhere, a .deb is what an
     // Ubuntu user actually wants.
     installer: (f) => /\.AppImage$/i.test(f) || /\.deb$/i.test(f),
-    updaterAsset: (f) => /\.AppImage\.tar\.gz$/i.test(f),
+    // The AppImage itself, signed in place. `.AppImage.tar.gz` was Tauri v1's
+    // shape and matched nothing here: v1.0.3 built a valid
+    // `…AppImage.sig` and this script looked straight past it, so Linux was the
+    // one platform published with downloads but no self-update.
+    updaterAsset: (f) => /\.AppImage$/i.test(f),
     updaterContentType: "application/gzip",
     // The headless pair — `wired-backend` and `wired` — for a server install,
     // which wants neither a desktop bundle nor a Rust toolchain. Deliberately

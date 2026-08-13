@@ -5,7 +5,7 @@ bundles on a `v*` tag, attaches them to a draft GitHub release, and publishes
 the same artefacts to R2.
 
 ```
-git tag v1.0.3 && git push origin v1.0.3
+git tag v1.0.4 && git push origin v1.0.4
 ```
 
 ## Where the downloads live
