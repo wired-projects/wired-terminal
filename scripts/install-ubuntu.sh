@@ -464,7 +464,14 @@ AUTH_HDR=""
 
 cat <<EOF
 
-  ${bold}Next${off}
+  ${bold}Next${off}            one command, and it walks the rest:
+       wired setup
+
+  It checks the agent CLI, starts a session, offers it a test message, takes a
+  Telegram bot token without echoing it, and waits for your phone to ask to
+  pair. Anything it cannot do it names.
+
+  ${bold}Or by hand${off}
   1. Log the agent CLI in, once, as $SVC_USER:
        $([ "$USER_SERVICE" -eq 1 ] && echo "claude" || echo "sudo -u $SVC_USER -H claude")
      (or put ANTHROPIC_API_KEY in $ENV_FILE and restart)
@@ -474,6 +481,7 @@ cat <<EOF
        wired ask "Summarize my git status"
 
   ${bold}Manage it${off}        wired status · wired watch · wired logs -f · wired doctor
+  ${bold}Change things${off}    wired telegram · wired folder · wired update · wired uninstall
   ${bold}From your laptop${off} wired remote add $(hostname -s 2>/dev/null || echo box) $SVC_USER@<this-server>
   ${bold}Live transcript${off}  $BASE/reader$([ -n "$TOKEN" ] && echo "?token=$TOKEN")
   ${bold}Settings${off}         $ENV_FILE  (restart after editing)
