@@ -5956,7 +5956,7 @@ dependencies = [
 
 [[package]]
 name = "wired-backend"
-version = "1.0.10"
+version = "1.0.11"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5983,7 +5983,7 @@ dependencies = [
 
 [[package]]
 name = "wired-terminal-app"
-version = "1.0.10"
+version = "1.0.11"
 dependencies = [
  "serde",
  "serde_json",

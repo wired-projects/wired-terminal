@@ -80,9 +80,8 @@ suggestions appear before you have said anything — click one to try it.
 Underneath the box, Wired always shows which folder it is working in. That is the
 extent of what it can touch.
 
-While it works, the top of the window says **Working on it…**. When it needs
-something from you, it says **Waiting for you** and the message shows two
-buttons: **Allow** and **Don't**. Nothing happens until you press one.
+While it works, the top of the window says **Working on it…**. It acts in the
+folder you chose without stopping to ask.
 
 ## 4. Reach it from your phone
 
@@ -101,8 +100,7 @@ router settings, nothing typed into a web address.
    **Let them in** button. Press it.
 
 Done. Anything you send the bot goes to your assistant, and its answers come
-back to your phone — including the **Allow** / **Don't** buttons when it needs
-permission for something.
+back to your phone.
 
 Commands the bot understands: `/status`, `/stop`, `/mute`, `/unmute`, `/help`.
 

@@ -12,9 +12,11 @@ pub const USAGE: &str = "\
 wired — manage a Wired Terminal agent, locally or over SSH
 
 USAGE
+  wired                  slash-command TUI (status when piped or --json)
   wired <command> [options]
 
 THE AGENT
+  tui                    slash-command TUI — /status, /ask, /watch, /quit
   status                 service, agent, API and chat in one screen
   ask <text>             send a task and print the reply
   watch                  follow the live transcript (ctrl-c to detach)
@@ -52,6 +54,7 @@ OPTIONS
   -V, --version
 
 EXAMPLES
+  wired
   wired status
   wired ask \"summarise my git status\"
   wired --remote pilot restart
@@ -122,6 +125,11 @@ pub enum Command {
     Remote(RemoteCmd),
     Help(Option<String>),
     Version,
+    /// The slash-command prompt. `from_bare` is a `wired` with no words, which
+    /// falls back to `status` when stdin is not a terminal or `--json` is set.
+    Tui {
+        from_bare: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -247,8 +255,8 @@ pub fn parse(argv: Vec<String>) -> ParseResult<Cli> {
         let command = if help {
             Command::Help(None)
         } else {
-            // A bare `wired` is nearly always "what is going on right now".
-            Command::Status
+            // A terminal gets the slash prompt; a pipe still gets `status`.
+            Command::Tui { from_bare: true }
         };
         return Ok(Cli { global, command });
     };
@@ -268,6 +276,10 @@ pub fn parse(argv: Vec<String>) -> ParseResult<Cli> {
 
     let command = match head.as_str() {
         "help" => Command::Help(rest.into_iter().next()),
+        "tui" | "repl" | "shell" => {
+            reject_extra("tui", &rest)?;
+            Command::Tui { from_bare: false }
+        }
         "status" | "st" => Command::Status,
         "start" | "up" => parse_start(rest)?,
         "stop" | "down" => parse_stop(rest)?,
@@ -638,6 +650,7 @@ fn parse_remote(rest: Vec<String>) -> ParseResult<Command> {
 /// Per-command help. Short on purpose: the top-level text is the reference.
 pub fn help_for(topic: &str) -> String {
     let body = match topic {
+        "tui" | "repl" | "shell" => "wired tui\n\n  A prompt for the same commands as argv, written with a slash:\n  /status, /ask …, /watch, /approve, /setup, /quit. /help lists the rest.\n\n  A bare `wired` in a terminal is this. Piped, or with --json, it is still\n  `status`, so a cron line does not hang on a prompt it cannot answer.",
         "status" => "wired status\n\n  Service state, agent session, API address and chat pairing.\n  Works without the API answering — the service row comes from systemd.\n\n  --json   the raw /api/health response",
         "start" => "wired start [--provider claude|grok|codex|gemini]\n\n  Starts the service if it is not running, waits for the API, then starts\n  the agent session with keep-alive on.",
         "stop" => "wired stop [--agent]\n\n  Stops the service. --agent leaves the service up and stops only the\n  agent session, which keep-alive will not restart until you `wired start`.",
@@ -672,8 +685,29 @@ mod tests {
     }
 
     #[test]
-    fn bare_invocation_is_status() {
-        assert!(matches!(parse_ok("").command, Command::Status));
+    fn bare_invocation_is_the_tui() {
+        assert!(matches!(
+            parse_ok("").command,
+            Command::Tui { from_bare: true }
+        ));
+    }
+
+    #[test]
+    fn tui_as_a_word_is_explicit() {
+        assert!(matches!(
+            parse_ok("tui").command,
+            Command::Tui { from_bare: false }
+        ));
+        assert!(matches!(
+            parse_ok("repl").command,
+            Command::Tui { from_bare: false }
+        ));
+    }
+
+    #[test]
+    fn tui_rejects_leftover_words() {
+        let err = parse(vec!["tui".into(), "now".into()]).unwrap_err();
+        assert!(err.contains("unexpected"), "{err}");
     }
 
     #[test]

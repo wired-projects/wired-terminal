@@ -159,7 +159,7 @@ pub struct ApproveRequest {
     pub allow: bool,
 }
 
-/// The four things a non-coder actually changes, plus the ones the wizard sets.
+/// What a non-coder actually changes, plus the ones the wizard sets.
 /// Every field is optional: the Settings screen sends only what moved.
 #[derive(Debug, Default, Deserialize)]
 pub struct SettingsRequest {

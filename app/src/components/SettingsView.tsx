@@ -11,9 +11,9 @@ import {
 import { briefly } from '../lib/errors';
 
 /**
- * The four things he will actually change — which assistant, the folder,
- * always-on, and approvals — plus the chat bridge, which is the reason the
- * phone in his pocket can reach any of it.
+ * The things he will actually change — which assistant, the folder, always-on,
+ * and start-at-login — plus the chat bridge, which is the reason the phone in
+ * his pocket can reach any of it.
  *
  * Everything here was previously an environment variable in a file he has no
  * way to open. Where one of those variables is still set, the control says so
@@ -143,14 +143,6 @@ export function SettingsView({ onChanged, onRestartAssistant }: SettingsViewProp
           />
 
           <Toggle
-            label="Ask me before it acts"
-            hint="It stops and waits for Allow or Don't before changing anything."
-            checked={settings.ask_before_acting}
-            disabled={busy || locked('ask_before_acting')}
-            onChange={(value) => void save({ ask_before_acting: value })}
-          />
-
-          <Toggle
             label="Start when I log in"
             hint="So it is already there in the morning."
             checked={settings.start_at_login}
@@ -160,14 +152,6 @@ export function SettingsView({ onChanged, onRestartAssistant }: SettingsViewProp
                 .setLoginItem(value)
                 .then((actual) => save({ start_at_login: actual }))
             }
-          />
-
-          <Toggle
-            label="Tell me when something needs me"
-            hint="A notification when a task finishes or it is waiting on an answer."
-            checked={settings.notifications}
-            disabled={busy}
-            onChange={(value) => void save({ notifications: value })}
           />
         </section>
 

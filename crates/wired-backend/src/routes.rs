@@ -921,8 +921,7 @@ async fn write_settings(
         .as_deref()
         .map(|p| p.trim().to_ascii_lowercase())
         .is_some_and(|p| state.manager.provider().as_deref() != Some(p.as_str()));
-    let restart_assistant =
-        (provider_pending || req.ask_before_acting.is_some()) && state.manager.running();
+    let restart_assistant = provider_pending && state.manager.running();
 
     Ok(Json(json!({
         "status": "success",

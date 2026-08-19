@@ -115,8 +115,8 @@ fn widen_path() {
 fn start_backend() -> Result<(oneshot::Sender<()>, Runtime), String> {
     widen_path();
     std::env::set_var("WIRED_HOST", BACKEND_HOST);
-    // Approvals default to "ask me" in a window, and to today's pre-answered
-    // behaviour on a server. See `config::is_desktop`.
+    // Marks this process as the packaged app (port fallback, paths). Approvals
+    // are always-on either way; `WIRED_AGENT_AUTO_APPROVE=0` is the override.
     std::env::set_var("WIRED_PROFILE", "desktop");
 
     let settings = wired_backend::settings_from_env().map_err(|e| e.to_string())?;

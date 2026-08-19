@@ -67,6 +67,7 @@ backend — one more binary, no interpreter — and it drives the API and the
 service so that neither `systemctl` nor a remembered `curl` is required:
 
 ```bash
+wired                                     # slash-command TUI — /status, /ask, /quit
 wired setup                               # the guided first run — start here
 wired folder [<path>]                     # where the agent works — show it, or move it
 wired uninstall [--keep-data]             # service, files and data, off this machine
@@ -79,6 +80,10 @@ wired restart
 wired update                              # is a newer version out, and install it
 wired doctor                              # the setup checks, with an exit code
 ```
+
+A bare `wired` in a terminal is a prompt. Type `/status` or `/ask summarise my git
+status` instead of leaving to run another command. Piped, or with `--json`, it
+is still `status`, so a cron line does not hang.
 
 It manages the machine it runs on, and any server you can SSH to:
 
@@ -209,17 +214,13 @@ curl -H "Authorization: Bearer $WIRED_AUTH_TOKEN" http://host:8000/api/agent/sta
 it to the window at runtime, so a packaged build can be given one after it was
 compiled; `VITE_AUTH_TOKEN` remains the dev-server fallback.
 
-> **Auto-approve, and who it defaults to.** On a server the CLIs launch with
-> their permission prompts pre-answered (`--dangerously-skip-permissions` /
-> `--always-approve`) — that is what makes unattended operation work, and it is
-> unchanged. In the desktop app the default is the other way round: prompts are
-> **on**, because there is a person there to answer them with a button, and
-> "stop asking me" is their own choice in Settings. `WIRED_AGENT_AUTO_APPROVE`
-> overrides both.
+> **Auto-approve.** The CLIs launch with their permission prompts pre-answered
+> (`--dangerously-skip-permissions` / `--always-approve`) — that is what makes
+> unattended operation work. `WIRED_AGENT_AUTO_APPROVE=0` turns prompts back on.
 >
-> An approval arrives on the transcript stream as a `prompt` event. Answer it
-> with `POST /api/agent/approve {"allow": true|false}` — or with the buttons in
-> the app, in `/reader`, or on the Telegram message.
+> If a prompt does appear, it arrives on the transcript stream as a `prompt`
+> event. Answer it with `POST /api/agent/approve {"allow": true|false}` — or
+> with the buttons in the app, in `/reader`, or on the Telegram message.
 
 > **Authorising a new device.** No longer "generate 24 random bytes and paste
 > them somewhere". An unknown chat that messages the bot gets a one-time

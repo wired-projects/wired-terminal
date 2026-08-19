@@ -53,10 +53,8 @@ pub fn int_env(name: &str, default: i64) -> i64 {
 
 /// Is this the desktop app rather than the server binary?
 ///
-/// It changes exactly one default — whether the agent asks before it acts. A
-/// person watching a window can answer an approval with a button; an unattended
-/// server has nobody to ask, and keeps the pre-answered behaviour it shipped
-/// with. The desktop shell sets this before reading settings.
+/// It changes desktop-only defaults such as moving off a busy port. The
+/// desktop shell sets this before reading settings.
 pub fn is_desktop() -> bool {
     std::env::var("WIRED_PROFILE")
         .map(|v| v.trim().eq_ignore_ascii_case("desktop"))
@@ -70,10 +68,9 @@ pub struct Settings {
     pub auth_token: String,
     pub allowed_origins: HashSet<String>,
     pub allow_any_origin: bool,
-    /// The product premise is an unattended 24/7 agent, so on a server the CLIs
-    /// are launched with their approval prompts pre-answered. Turn this off and
-    /// the agent will stop and wait on the first tool call it wants permission
-    /// for (which the transcript stream surfaces as a `prompt` event).
+    /// The product premise is an unattended 24/7 agent, so the CLIs launch with
+    /// their approval prompts pre-answered. `WIRED_AGENT_AUTO_APPROVE=0` turns
+    /// that off — the agent then stops and waits (a `prompt` event on the stream).
     pub agent_auto_approve: bool,
     /// Bind the next free port when `port` is taken, instead of failing to
     /// start. Off for the server binary, whose port is somebody's firewall rule.

@@ -9,6 +9,7 @@ mod client;
 mod cmd;
 mod profile;
 mod service;
+mod tui;
 mod ui;
 
 use args::Command;
@@ -91,33 +92,16 @@ async fn run(ui: &Ui, cli: args::Cli) -> client::Result<i32> {
     let supervisor = Supervisor::for_target(&target);
     let json = cli.global.json;
 
-    match &cli.command {
-        Command::Status => cmd::status(ui, &target, &supervisor, json).await,
-        Command::Start { provider } => cmd::start(ui, &target, &supervisor, provider.clone()).await,
-        Command::Stop { agent_only } => cmd::stop(ui, &target, &supervisor, *agent_only).await,
-        Command::Restart => cmd::restart(ui, &target, &supervisor).await,
-        Command::Logs { follow, lines } => {
-            supervisor.logs(*follow, *lines)?;
-            Ok(cmd::EXIT_OK)
+    if let Command::Tui { from_bare } = cli.command {
+        // A pipe or `--json` on a bare `wired` is still `status`, which is
+        // what scripts and cron already expect. `wired tui` itself refuses
+        // a non-terminal rather than silently becoming something else.
+        let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if json || (from_bare && !tty) {
+            return cmd::status(ui, &target, &supervisor, json).await;
         }
-        Command::Ask { text, wait } => cmd::ask(ui, &target, text, *wait, json).await,
-        Command::Watch => cmd::watch(ui, &target).await,
-        Command::Approve { allow } => cmd::approve(ui, &target, *allow).await,
-        Command::Doctor { log } => cmd::doctor(ui, &target, *log, json).await,
-        Command::Setup { yes, telegram } => {
-            cmd::setup(ui, &target, &supervisor, *yes, *telegram, json).await
-        }
-        Command::Update { check_only, yes } => cmd::update(ui, &target, *check_only, *yes).await,
-        Command::Pair(sub) => cmd::pair(ui, &target, sub, json).await,
-        Command::Telegram(sub) => cmd::telegram(ui, &target, sub, json).await,
-        Command::Folder(path) => cmd::folder(ui, &target, path.as_deref(), json).await,
-        Command::Uninstall { keep_data, yes } => {
-            cmd::uninstall(ui, &target, &supervisor, *keep_data, *yes).await
-        }
-        Command::Schedule(sub) => cmd::schedule(ui, &target, sub, json).await,
-        // Handled before the runtime was built.
-        Command::Remote(_) | Command::Serve | Command::Help(_) | Command::Version => {
-            Ok(cmd::EXIT_OK)
-        }
+        return tui::run(ui, &target, &supervisor, &mut config).await;
     }
+
+    cmd::execute(ui, &cli.command, &target, &supervisor, &mut config, json).await
 }

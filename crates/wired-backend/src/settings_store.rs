@@ -55,10 +55,11 @@ pub struct Stored {
     /// Restart the CLI when it exits — the "always on" switch.
     pub always_on: Option<bool>,
     pub auto_start: Option<bool>,
-    /// `true` = stop and ask before acting. The inverse of the CLI flags in
-    /// `providers.rs`, phrased the way the Settings screen asks the question.
+    /// Kept so an older `settings.json` still loads. Approvals are always-on
+    /// now; `WIRED_AGENT_AUTO_APPROVE=0` is the override.
     pub ask_before_acting: Option<bool>,
     pub start_at_login: Option<bool>,
+    /// Kept so an older `settings.json` still loads. Nothing reads this.
     pub notifications: Option<bool>,
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]

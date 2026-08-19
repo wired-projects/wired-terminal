@@ -108,19 +108,11 @@ pub fn package_for(provider: &str) -> Option<&'static str> {
 
 /// Should the CLI act without confirming?
 ///
-/// A desktop user gets approval prompts he can answer with a button, so he is
-/// asked first and can turn that off himself. An unattended server has nobody to
-/// ask and keeps the pre-answered default it has always had. Either way
-/// `WIRED_AGENT_AUTO_APPROVE` overrides both.
+/// Yes, unless `WIRED_AGENT_AUTO_APPROVE=0`. The agent is unattended by
+/// design — a prompt nobody is sitting in front of just wedges the session.
+/// A stored Settings toggle used to flip this; that control is gone.
 pub fn auto_approve_enabled() -> bool {
-    let stored = crate::settings_store::get()
-        .ask_before_acting
-        .map(|ask_first| !ask_first);
-    crate::settings_store::flag_or(
-        "WIRED_AGENT_AUTO_APPROVE",
-        stored,
-        !crate::config::is_desktop(),
-    )
+    crate::config::flag("WIRED_AGENT_AUTO_APPROVE", true)
 }
 
 fn auto_approve_args(agent: &Agent) -> Vec<String> {
@@ -381,6 +373,16 @@ mod tests {
         assert!(resolve_login_cmd("nonesuch").is_none());
         // The shell has no sign-in to run.
         assert!(resolve_login_cmd("shell").is_none());
+    }
+
+    #[test]
+    fn approvals_are_on_unless_the_environment_says_otherwise() {
+        if std::env::var_os("WIRED_AGENT_AUTO_APPROVE").is_none() {
+            assert!(
+                auto_approve_enabled(),
+                "the agent should act without asking by default"
+            );
+        }
     }
 
     #[test]

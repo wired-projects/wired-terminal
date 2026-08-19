@@ -198,7 +198,7 @@ async fn settings_describe_what_the_screen_can_change() {
     let (status, body) = get(addr, "/api/settings").await;
     assert_eq!(status, 200);
     let json: Value = serde_json::from_str(&body).unwrap();
-    for field in ["assistant", "folder", "always_on", "ask_before_acting"] {
+    for field in ["assistant", "folder", "always_on"] {
         assert!(!json[field].is_null(), "{field} missing from /api/settings");
     }
     // A setting the environment has taken over is reported, not silently

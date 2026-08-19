@@ -147,8 +147,8 @@ export function Wizard({ onFinished, onSkip }: WizardProps) {
                 assistant</em>. It stops immediately.
               </li>
               <li>
-                <strong>Before it acts.</strong> It will ask you first, with Allow and Don't
-                buttons, until you tell it to stop asking.
+                <strong>It acts on its own.</strong> Inside the folder you pick, it does not
+                stop to ask. Stop it from the menu bar icon if you need to.
               </li>
             </ul>
             <div className="wizard-actions">

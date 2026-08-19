@@ -210,6 +210,9 @@ jobs:
           # One directory per target: two macOS dmgs are otherwise
           # indistinguishable, and the publish script keys off this name.
           name: wired-terminal-${{ matrix.target }}
+          # One day is enough: publish downloads these in the next job, then
+          # the installers live on R2. The default 90 days fills Actions storage.
+          retention-days: 1
           path: |
             app/src-tauri/target/**/release/bundle/**/*.dmg
             app/src-tauri/target/**/release/bundle/**/*.msi
@@ -294,6 +297,9 @@ jobs:
           # Named for the target triple like the matrix ones, because
           # publish-r2.mjs scopes files by the directory they arrive in.
           name: wired-terminal-aarch64-unknown-linux-gnu
+          # One day is enough: publish downloads these in the next job, then
+          # the installers live on R2. The default 90 days fills Actions storage.
+          retention-days: 1
           path: wired-terminal-server_linux-aarch64.tar.gz
           if-no-files-found: error
 

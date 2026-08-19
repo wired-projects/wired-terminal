@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::args::{Pair, RemoteCmd, ScheduleCmd, Telegram};
+use super::args::{Command, Pair, RemoteCmd, ScheduleCmd, Telegram};
 use super::client::{Api, Result};
 use super::profile::{Config, Remote, Target};
 use super::service::Supervisor;
@@ -18,6 +18,46 @@ use super::ui::{human_duration, Mark, Ui};
 /// unhealthy. `wired doctor` in a cron job wants to tell those two apart.
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_UNHEALTHY: i32 = 2;
+
+/// Run one parsed command. The TUI and `main` share this so a slash cannot
+/// grow a behaviour the argv form does not have.
+pub async fn execute(
+    ui: &Ui,
+    command: &Command,
+    target: &Target,
+    supervisor: &Supervisor,
+    config: &mut Config,
+    json: bool,
+) -> Result<i32> {
+    match command {
+        Command::Status => status(ui, target, supervisor, json).await,
+        Command::Start { provider } => start(ui, target, supervisor, provider.clone()).await,
+        Command::Stop { agent_only } => stop(ui, target, supervisor, *agent_only).await,
+        Command::Restart => restart(ui, target, supervisor).await,
+        Command::Logs { follow, lines } => {
+            supervisor.logs(*follow, *lines)?;
+            Ok(EXIT_OK)
+        }
+        Command::Ask { text, wait } => ask(ui, target, text, *wait, json).await,
+        Command::Watch => watch(ui, target).await,
+        Command::Approve { allow } => approve(ui, target, *allow).await,
+        Command::Doctor { log } => doctor(ui, target, *log, json).await,
+        Command::Setup { yes, telegram } => {
+            setup(ui, target, supervisor, *yes, *telegram, json).await
+        }
+        Command::Update { check_only, yes } => update(ui, target, *check_only, *yes).await,
+        Command::Pair(sub) => pair(ui, target, sub, json).await,
+        Command::Telegram(sub) => telegram(ui, target, sub, json).await,
+        Command::Folder(path) => folder(ui, target, path.as_deref(), json).await,
+        Command::Uninstall { keep_data, yes } => {
+            uninstall(ui, target, supervisor, *keep_data, *yes).await
+        }
+        Command::Schedule(sub) => schedule(ui, target, sub, json).await,
+        Command::Remote(sub) => remote(ui, config, sub),
+        // Answered before a target exists, or they take over the process.
+        Command::Tui { .. } | Command::Serve | Command::Help(_) | Command::Version => Ok(EXIT_OK),
+    }
+}
 
 fn str_at<'a>(value: &'a Value, path: &[&str]) -> &'a str {
     let mut cursor = value;
