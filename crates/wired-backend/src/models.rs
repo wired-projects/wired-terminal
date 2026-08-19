@@ -170,13 +170,9 @@ pub struct SettingsRequest {
     #[serde(default)]
     pub always_on: Option<bool>,
     #[serde(default)]
-    pub ask_before_acting: Option<bool>,
-    #[serde(default)]
     pub auto_start: Option<bool>,
     #[serde(default)]
     pub start_at_login: Option<bool>,
-    #[serde(default)]
-    pub notifications: Option<bool>,
     #[serde(default)]
     pub port: Option<u16>,
     /// Empty string clears it and reopens the API to loopback callers.

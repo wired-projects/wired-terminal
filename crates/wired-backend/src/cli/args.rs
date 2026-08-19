@@ -72,6 +72,22 @@ pub struct Global {
     pub no_color: bool,
 }
 
+impl Global {
+    /// Was any of these set? They configure the whole process, so the TUI
+    /// refuses them on a line typed inside it. Destructured on purpose: a new
+    /// global field will not compile until somebody decides about it here.
+    pub fn is_process_level(&self) -> bool {
+        let Global {
+            remote,
+            url,
+            token,
+            json,
+            no_color,
+        } = self;
+        remote.is_some() || url.is_some() || token.is_some() || *json || *no_color
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     Status,
@@ -664,7 +680,7 @@ pub fn help_for(topic: &str) -> String {
         "setup" | "onboard" => "wired setup [--yes] [--no-telegram]\n\n  The guided first run, in the order the pieces depend on each other: the\n  agent CLI is installed and answers, a session is running, Telegram is\n  connected and your phone is paired, and anything the agent is already\n  waiting on is dealt with.\n\n  It only ever asks before doing something. --yes takes the safe steps\n  without asking and skips the ones that need a human, naming what it\n  skipped, which is what makes it usable from a provisioning script.\n\n  --no-telegram leaves the chat bridge alone.\n\n  `wired doctor` is the same checks with no questions and an exit code.",
         "doctor" => "wired doctor [--log]\n\n  The setup checks: agent CLI installed, signed in, working folder\n  writable, ports, chat bridge. Exits non-zero if a check failed.\n\n  --log    also print recent log lines",
         "uninstall" | "remove" => "wired uninstall [--keep-data] [--yes]\n\n  Takes this install off the machine: stops the service, removes the\n  systemd unit, the binaries, /etc/wired-terminal, the `wired` symlink,\n  and the transcripts and settings.\n\n  --keep-data  leave the transcripts, settings and paired chats alone.\n               The install goes; what it recorded stays.\n  --yes        do not ask. There is no undo, so it asks by default.\n\n  It prints every path first and removes nothing until you agree, and it\n  refuses to delete a directory it does not own — a --dir install shares\n  nothing with /usr or /opt itself.\n\n  Left alone: the service account, Node, and the agent CLI with its\n  sign-in. Those predate Wired and are not its to remove.",
-        "folder" | "cwd" => "wired folder                   where the agent works, and what decided that\nwired folder /srv/wired        move it there\n\n  The agent acts inside this directory, and with ask-before-acting off it\n  acts without checking — so this is a scope decision, not a preference.\n  A service user's bare home is the wrong answer when that home holds\n  .ssh or another service's .env.\n\n  WIRED_AGENT_CWD outranks the stored setting, so on a server install this\n  writes /etc/wired-terminal/wired.env rather than a setting the\n  environment would ignore. It says which one it did.\n\n  A running session keeps the directory it started in, so this restarts\n  the service unless you say no.",
+        "folder" | "cwd" => "wired folder                   where the agent works, and what decided that\nwired folder /srv/wired        move it there\n\n  The agent acts inside this directory without stopping to ask, so this is\n  a scope decision, not a preference.\n  A service user's bare home is the wrong answer when that home holds\n  .ssh or another service's .env.\n\n  WIRED_AGENT_CWD outranks the stored setting, so on a server install this\n  writes /etc/wired-terminal/wired.env rather than a setting the\n  environment would ignore. It says which one it did.\n\n  A running session keeps the directory it started in, so this restarts\n  the service unless you say no.",
         "telegram" | "chat" => "wired telegram                 what the bridge is doing\nwired telegram <token>         set the bot token and connect\nwired telegram on              prompt for the token, without echoing it\nwired telegram off             stop the bridge, keep the token\n\n  Make a bot first: message @BotFather in Telegram, /newbot, answer the two\n  prompts. It replies with a token like 8123456789:AAH...\n\n  `wired telegram on` with no token prompts for one and does not echo it, so\n  it stays out of your shell history and off the process list. That is the\n  one to use over ssh.\n\n  Then message the bot from your phone and `wired pair` to let it in.\n  `off` keeps the token so `wired telegram on` reconnects; `pair reset`\n  forgets it entirely.",
         "pair" => "wired pair                    pending requests and paired chats\nwired pair approve <code>     allow a chat to drive the agent\nwired pair deny <code>\nwired pair unpair <chat-id>   revoke one that was allowed\nwired pair reset [--yes]      forget the bot token and unpair everything\n\n  `unpair` leaves the bot running, so that phone can pair again with a fresh\n  code. `reset` throws the token away too — use it when rotating to a new bot,\n  and revoke the old token in BotFather afterwards.",
         "schedule" => "wired schedule                list scheduled tasks and when they next run\nwired schedule run <id>       run one now\nwired schedule delete <id>",

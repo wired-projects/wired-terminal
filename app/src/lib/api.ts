@@ -214,7 +214,6 @@ export interface Settings {
   auto_start: boolean;
   ask_before_acting: boolean;
   start_at_login: boolean;
-  notifications: boolean;
   onboarded: boolean;
   port: number;
   auth_required: boolean;

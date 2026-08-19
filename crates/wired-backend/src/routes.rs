@@ -820,7 +820,6 @@ fn settings_snapshot(state: &AppState) -> Value {
         "auto_start": state.assistant.config().auto_start,
         "ask_before_acting": !auto_approve_enabled(),
         "start_at_login": stored.start_at_login.unwrap_or(false),
-        "notifications": stored.notifications.unwrap_or(true),
         "onboarded": stored.onboarded,
         "port": state.settings.port,
         "auth_required": state.settings.auth_required(),
@@ -840,7 +839,6 @@ fn env_overrides() -> Vec<&'static str> {
         ("folder", "WIRED_AGENT_CWD"),
         ("always_on", "WIRED_ASSISTANT_KEEP_ALIVE"),
         ("auto_start", "WIRED_ASSISTANT_AUTO_START"),
-        ("ask_before_acting", "WIRED_AGENT_AUTO_APPROVE"),
         ("port", "WIRED_PORT"),
         ("auth_token", "WIRED_AUTH_TOKEN"),
     ]
@@ -882,14 +880,8 @@ async fn write_settings(
         if let Some(value) = req.auto_start {
             s.auto_start = Some(value);
         }
-        if let Some(value) = req.ask_before_acting {
-            s.ask_before_acting = Some(value);
-        }
         if let Some(value) = req.start_at_login {
             s.start_at_login = Some(value);
-        }
-        if let Some(value) = req.notifications {
-            s.notifications = Some(value);
         }
         if let Some(value) = req.port {
             s.port = Some(value);

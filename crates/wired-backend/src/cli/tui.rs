@@ -5,16 +5,15 @@
 //! without leaving the prompt. Piped, or with `--json`, the old default still
 //! holds, because a cron line cannot answer a prompt.
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 
-use super::args::{self, Command, Global};
+use super::args::{self, Command};
 use super::client::Result;
 use super::cmd;
 use super::profile::{Config, Target};
 use super::service::Supervisor;
 use super::ui::Ui;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+use crate::VERSION;
 
 /// Everyday commands on the opening screen. `/help` lists the rest.
 const MENU: &[(&str, &str)] = &[
@@ -51,25 +50,24 @@ pub enum Slash {
     Run(Command),
 }
 
+/// Only called with a terminal on stdin: `main` owns that decision, so the
+/// rule and its fallback to `status` sit in one place.
 pub async fn run(
     ui: &Ui,
     target: &Target,
     supervisor: &Supervisor,
     config: &mut Config,
 ) -> Result<i32> {
-    if !io::stdin().is_terminal() {
-        return Err("the slash TUI needs a terminal — pipe `wired status` instead".into());
-    }
-
     banner(ui, target);
     menu(ui, MENU);
     ui.note("same commands as argv, with a slash");
     println!();
 
     let stdin = io::stdin();
+    let prompt = ui.dim(">");
     let mut line = String::new();
     loop {
-        print!("{} ", ui.dim(">"));
+        print!("{prompt} ");
         let _ = io::stdout().flush();
         line.clear();
         let n = stdin
@@ -137,14 +135,17 @@ pub fn parse_slash(line: &str) -> std::result::Result<Slash, String> {
     }
 
     let mut words = split_words(rest);
-    if let Some(head) = words.first_mut() {
-        head.make_ascii_lowercase();
+    let Some(head) = words.first_mut() else {
+        return Ok(Slash::Help(None));
+    };
+    head.make_ascii_lowercase();
+    // `?` is the one spelling the argv parser has never had to know about.
+    if head == "?" {
+        "help".clone_into(head);
     }
-    let head = words.first().map(String::as_str).unwrap_or("");
-    match head {
+    match head.as_str() {
         "quit" | "exit" | "q" => return Ok(Slash::Quit),
         "version" | "v" => return Ok(Slash::Version),
-        "help" | "?" => return Ok(Slash::Help(words.into_iter().nth(1))),
         "tui" | "repl" | "shell" => return Err("already in the TUI".into()),
         "serve" => {
             return Err("serve takes over the process — run `wired serve` from the shell".into());
@@ -153,22 +154,19 @@ pub fn parse_slash(line: &str) -> std::result::Result<Slash, String> {
     }
 
     let cli = args::parse(words)?;
-    reject_globals(&cli.global)?;
-    match cli.command {
-        Command::Tui { .. } | Command::Serve | Command::Version | Command::Help(_) => {
-            Ok(Slash::Help(None))
-        }
-        command => Ok(Slash::Run(command)),
-    }
-}
-
-fn reject_globals(global: &Global) -> std::result::Result<(), String> {
-    if global.remote.is_some() || global.url.is_some() || global.token.is_some() || global.json {
+    if cli.global.is_process_level() {
         return Err(
-            "target flags belong on the wired command itself: `wired --remote pilot`".into(),
+            "those flags belong on the wired command itself: `wired --remote pilot`".into(),
         );
     }
-    Ok(())
+    match cli.command {
+        // `/help ask` and `/status --help` are the same question.
+        Command::Help(topic) => Ok(Slash::Help(topic)),
+        Command::Version => Ok(Slash::Version),
+        // The words are caught above; this is their flag spellings falling through.
+        Command::Tui { .. } | Command::Serve => Ok(Slash::Help(None)),
+        command => Ok(Slash::Run(command)),
+    }
 }
 
 /// Quote-aware split so `/ask "hello there"` is one sentence, not two words
@@ -268,9 +266,29 @@ mod tests {
     }
 
     #[test]
+    fn help_reaches_the_topic_either_way() {
+        // `--help` on a command is the same question as `/help <command>`,
+        // so the topic has to survive the argv parser.
+        for line in ["/help status", "/status --help"] {
+            match slash(line) {
+                Slash::Help(Some(topic)) => assert_eq!(topic, "status", "{line}"),
+                other => panic!("{line}: {other:?}"),
+            }
+        }
+        assert!(matches!(slash("/?"), Slash::Help(None)));
+        match slash("/? ask") {
+            Slash::Help(Some(topic)) => assert_eq!(topic, "ask"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn target_flags_stay_on_the_outer_command() {
         let err = parse_slash("/status --remote pilot").unwrap_err();
         assert!(err.contains("wired --remote"), "{err}");
+        // Every global counts, not just the ones that pick a host.
+        assert!(parse_slash("/status --no-color").is_err());
+        assert!(parse_slash("/status --json").is_err());
     }
 
     #[test]

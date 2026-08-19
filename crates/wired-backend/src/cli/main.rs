@@ -93,12 +93,16 @@ async fn run(ui: &Ui, cli: args::Cli) -> client::Result<i32> {
     let json = cli.global.json;
 
     if let Command::Tui { from_bare } = cli.command {
-        // A pipe or `--json` on a bare `wired` is still `status`, which is
-        // what scripts and cron already expect. `wired tui` itself refuses
-        // a non-terminal rather than silently becoming something else.
+        // The whole tty rule lives here, so `tui::run` can assume a terminal.
+        // A pipe or `--json` on a bare `wired` is still `status`, which is what
+        // scripts and cron already expect; `wired tui` spelled out says so
+        // rather than silently becoming something else.
         let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
         if json || (from_bare && !tty) {
             return cmd::status(ui, &target, &supervisor, json).await;
+        }
+        if !tty {
+            return Err("the slash TUI needs a terminal — pipe `wired status` instead".into());
         }
         return tui::run(ui, &target, &supervisor, &mut config).await;
     }

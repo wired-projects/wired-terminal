@@ -55,12 +55,7 @@ pub struct Stored {
     /// Restart the CLI when it exits — the "always on" switch.
     pub always_on: Option<bool>,
     pub auto_start: Option<bool>,
-    /// Kept so an older `settings.json` still loads. Approvals are always-on
-    /// now; `WIRED_AGENT_AUTO_APPROVE=0` is the override.
-    pub ask_before_acting: Option<bool>,
     pub start_at_login: Option<bool>,
-    /// Kept so an older `settings.json` still loads. Nothing reads this.
-    pub notifications: Option<bool>,
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
@@ -76,9 +71,7 @@ impl Default for Stored {
             folder: None,
             always_on: None,
             auto_start: None,
-            ask_before_acting: None,
             start_at_login: None,
-            notifications: None,
             port: None,
             auth_token: None,
             telegram: Telegram::default(),
